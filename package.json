@@ -9,7 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@google-cloud/vertexai": "^1.10.0",
+    "@google/genai": "^1.44.0",
+    "firebase": "^12.10.0",
+    "firebase-admin": "^13.7.0",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
     "react": "19.2.3",

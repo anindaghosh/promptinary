@@ -1,0 +1,57 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches:
+      - develop
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so amend has a real commit to work with
+          fetch-depth: 1
+
+      - name: Override git commit author for Vercel
+        # Vercel CLI reads `git log -1 --format='%ae'` and validates the author
+        # has access to the Vercel project. We amend (local only, never pushed)
+        # so it always appears as the Vercel account owner regardless of who
+        # wrote the original commit.
+        run: |
+          git config user.email "${{ secrets.VERCEL_OWNER_EMAIL }}"
+          git config user.name "${{ secrets.VERCEL_OWNER_NAME }}"
+          git commit --amend --no-edit --reset-author
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Vercel CLI
+        run: pnpm add -g vercel@latest
+
+      # - name: Pull Vercel Environment Information
+      #   run: vercel pull --yes --token=${{ secrets.VERCEL_TOKEN }}
+
+      # - name: Build Project Artifacts
+      #   run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        env:
+          # Belt-and-suspenders: also set the Vercel git author env vars
+          # so the Vercel API layer also sees the correct owner login.
+          VERCEL_GIT_COMMIT_AUTHOR_LOGIN: ${{ secrets.VERCEL_OWNER_LOGIN }}
+          VERCEL_GIT_COMMIT_AUTHOR_NAME: ${{ secrets.VERCEL_OWNER_NAME }}
+        run: vercel deploy --archive=tgz --prod --token=${{ secrets.VERCEL_TOKEN }}

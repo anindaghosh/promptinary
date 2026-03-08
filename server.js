@@ -11,6 +11,90 @@ const port = parseInt(process.env.PORT || '3000', 10);
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
+// ─── Firebase Admin ──────────────────────────────────────────────────────────
+let adminDb = null;
+
+function initFirebase() {
+  try {
+    const admin = require('firebase-admin');
+    if (admin.apps.length) {
+      adminDb = admin.firestore();
+      return;
+    }
+    const projectId   = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
+    const privateKey  = process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, '\n');
+
+    if (projectId && clientEmail && privateKey) {
+      admin.initializeApp({
+        credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
+        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+      });
+    } else {
+      admin.initializeApp({ projectId });
+    }
+    adminDb = admin.firestore();
+    console.log('[Firebase] Admin SDK initialized');
+  } catch (err) {
+    console.warn('[Firebase] Admin SDK init failed — persistence disabled:', err.message);
+  }
+}
+
+async function persistGameHistory(room, finalScores) {
+  if (!adminDb) return;
+  try {
+    const gameId = uuidv4();
+    const players = Array.from(room.players.values());
+
+    // Write game history
+    await adminDb.collection('gameHistory').doc(gameId).set({
+      gameId,
+      roomCode: room.code,
+      completedAt: new Date(),
+      totalRounds: room.totalRounds,
+      players: players.map(p => ({ playerId: p.id, firebaseUid: p.firebaseUid || null, name: p.name, avatar: p.avatar })),
+      roundResults: room.roundResults,
+      finalScores,
+    });
+
+    // Update each player's stats in users/{uid}
+    for (const entry of finalScores) {
+      const uid = room.players.get(entry.playerId)?.firebaseUid;
+      if (!uid) continue;
+      try {
+        const ref = adminDb.collection('users').doc(uid);
+        const snap = await ref.get();
+        if (snap.exists) {
+          const data = snap.data();
+          await ref.update({
+            gamesPlayed: (data.gamesPlayed || 0) + 1,
+            totalScore: (data.totalScore || 0) + entry.total,
+            bestScore: Math.max(data.bestScore || 0, entry.total),
+          });
+        }
+      } catch (e) {
+        console.warn('[Firebase] Failed to update user stats for', uid, e.message);
+      }
+    }
+
+    console.log(`[Firebase] Game history saved: ${gameId}`);
+  } catch (err) {
+    console.warn('[Firebase] Failed to persist game history:', err.message);
+  }
+}
+
+async function validateTeamMembership(teamId, firebaseUid) {
+  if (!adminDb || !teamId || !firebaseUid) return true; // no restriction
+  try {
+    const snap = await adminDb.collection('teams').doc(teamId).get();
+    if (!snap.exists) return false;
+    const data = snap.data();
+    return (data.memberUids || []).includes(firebaseUid);
+  } catch {
+    return true; // fail open if Firestore unavailable
+  }
+}
+
 // ─── Game State ─────────────────────────────────────────────────────────────
 const rooms = new Map(); // roomCode → Room
 const ROUND_DURATION_MS = 90_000; // 90 seconds per round
@@ -21,20 +105,21 @@ function generateRoomCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-function createRoom(hostId, hostName) {
+function createRoom(hostId, hostName, firebaseUid, teamId = null) {
   const code = generateRoomCode();
   const room = {
     code,
     hostId,
-    phase: 'lobby', // lobby | countdown | playing | scoring | reveal | leaderboard
+    teamId,
+    phase: 'lobby',
     players: new Map(),
     currentRound: 0,
     totalRounds: TOTAL_ROUNDS,
     currentImageId: null,
     roundStartTime: null,
     roundTimer: null,
-    submissions: new Map(), // playerId → { prompt, imageData, submittedAt }
-    scores: new Map(),      // playerId → { roundScores: [], total }
+    submissions: new Map(),
+    scores: new Map(),
     roundResults: [],
   };
   room.players.set(hostId, {
@@ -43,6 +128,7 @@ function createRoom(hostId, hostName) {
     isReady: false,
     isHost: true,
     avatar: getAvatar(hostName),
+    firebaseUid: firebaseUid || null,
   });
   rooms.set(code, room);
   return room;
@@ -50,7 +136,7 @@ function createRoom(hostId, hostName) {
 
 function getAvatar(name) {
   const avatars = ['🦸', '🧙', '🤖', '👾', '🦊', '🐉', '🦅', '🐺', '🦁', '🐯'];
-  const idx = name.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % avatars.length;
+  const idx = (name || 'A').split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % avatars.length;
   return avatars[idx];
 }
 
@@ -59,20 +145,17 @@ function getRoomState(room) {
     code: room.code,
     phase: room.phase,
     hostId: room.hostId,
+    teamId: room.teamId,
     currentRound: room.currentRound,
     totalRounds: room.totalRounds,
     currentImageId: room.currentImageId,
     roundStartTime: room.roundStartTime,
     players: Array.from(room.players.values()),
     submissions: Array.from(room.submissions.entries()).map(([id, s]) => ({
-      playerId: id,
-      hasSubmitted: true,
-      prompt: s.prompt,
+      playerId: id, hasSubmitted: true, prompt: s.prompt,
     })),
     scores: Array.from(room.scores.entries()).map(([id, s]) => ({
-      playerId: id,
-      total: s.total,
-      roundScores: s.roundScores,
+      playerId: id, total: s.total, roundScores: s.roundScores,
     })),
     roundResults: room.roundResults,
   };
@@ -80,26 +163,26 @@ function getRoomState(room) {
 
 // ─── Reference Images ────────────────────────────────────────────────────────
 const REFERENCE_IMAGES = [
-  { id: 'img-001', filename: 'starry-night.jpg', category: 'Fine Art', difficulty: 'Hard', title: 'Starry Night Style' },
-  { id: 'img-002', filename: 'mountain-lake.jpg', category: 'Photography', difficulty: 'Medium', title: 'Mountain Lake' },
-  { id: 'img-003', filename: 'neon-city.jpg', category: 'Concept Art', difficulty: 'Hard', title: 'Neon Cityscape' },
-  { id: 'img-004', filename: 'cherry-blossom.jpg', category: 'Nature', difficulty: 'Easy', title: 'Cherry Blossoms' },
-  { id: 'img-005', filename: 'lighthouse.jpg', category: 'Architecture', difficulty: 'Medium', title: 'Lighthouse at Dusk' },
-  { id: 'img-006', filename: 'hot-air-balloon.jpg', category: 'Photography', difficulty: 'Medium', title: 'Hot Air Balloons' },
-  { id: 'img-007', filename: 'underwater.jpg', category: 'Nature', difficulty: 'Hard', title: 'Underwater Coral' },
-  { id: 'img-008', filename: 'desert-dunes.jpg', category: 'Photography', difficulty: 'Easy', title: 'Desert Dunes' },
-  { id: 'img-009', filename: 'space-nebula.jpg', category: 'Concept Art', difficulty: 'Hard', title: 'Space Nebula' },
-  { id: 'img-010', filename: 'autumn-forest.jpg', category: 'Nature', difficulty: 'Easy', title: 'Autumn Forest' },
-  { id: 'img-011', filename: 'tokyo-street.jpg', category: 'Photography', difficulty: 'Medium', title: 'Tokyo Street' },
-  { id: 'img-012', filename: 'abstract-waves.jpg', category: 'Fine Art', difficulty: 'Hard', title: 'Abstract Waves' },
-  { id: 'img-013', filename: 'castle-ruins.jpg', category: 'Architecture', difficulty: 'Medium', title: 'Castle Ruins' },
-  { id: 'img-014', filename: 'arctic-fox.jpg', category: 'Nature', difficulty: 'Medium', title: 'Arctic Fox' },
-  { id: 'img-015', filename: 'art-deco.jpg', category: 'Architecture', difficulty: 'Hard', title: 'Art Deco Interior' },
-  { id: 'img-016', filename: 'tulip-fields.jpg', category: 'Nature', difficulty: 'Easy', title: 'Tulip Fields' },
-  { id: 'img-017', filename: 'steampunk.jpg', category: 'Concept Art', difficulty: 'Hard', title: 'Steampunk City' },
-  { id: 'img-018', filename: 'greek-island.jpg', category: 'Photography', difficulty: 'Easy', title: 'Greek Island' },
-  { id: 'img-019', filename: 'cubist-portrait.jpg', category: 'Fine Art', difficulty: 'Hard', title: 'Cubist Portrait' },
-  { id: 'img-020', filename: 'waterfall.jpg', category: 'Nature', difficulty: 'Medium', title: 'Jungle Waterfall' },
+  { id: 'img-001', filename: 'starry-night.jpg',    category: 'Fine Art',     difficulty: 'Hard',   title: 'Starry Night Style' },
+  { id: 'img-002', filename: 'mountain-lake.jpg',   category: 'Photography',  difficulty: 'Medium', title: 'Mountain Lake' },
+  { id: 'img-003', filename: 'neon-city.jpg',        category: 'Concept Art',  difficulty: 'Hard',   title: 'Neon Cityscape' },
+  { id: 'img-004', filename: 'cherry-blossom.jpg',  category: 'Nature',       difficulty: 'Easy',   title: 'Cherry Blossoms' },
+  { id: 'img-005', filename: 'lighthouse.jpg',      category: 'Architecture', difficulty: 'Medium', title: 'Lighthouse at Dusk' },
+  { id: 'img-006', filename: 'hot-air-balloon.jpg', category: 'Photography',  difficulty: 'Medium', title: 'Hot Air Balloons' },
+  { id: 'img-007', filename: 'underwater.jpg',      category: 'Nature',       difficulty: 'Hard',   title: 'Underwater Coral' },
+  { id: 'img-008', filename: 'desert-dunes.jpg',    category: 'Photography',  difficulty: 'Easy',   title: 'Desert Dunes' },
+  { id: 'img-009', filename: 'space-nebula.jpg',    category: 'Concept Art',  difficulty: 'Hard',   title: 'Space Nebula' },
+  { id: 'img-010', filename: 'autumn-forest.jpg',   category: 'Nature',       difficulty: 'Easy',   title: 'Autumn Forest' },
+  { id: 'img-011', filename: 'tokyo-street.jpg',    category: 'Photography',  difficulty: 'Medium', title: 'Tokyo Street' },
+  { id: 'img-012', filename: 'abstract-waves.jpg',  category: 'Fine Art',     difficulty: 'Hard',   title: 'Abstract Waves' },
+  { id: 'img-013', filename: 'castle-ruins.jpg',    category: 'Architecture', difficulty: 'Medium', title: 'Castle Ruins' },
+  { id: 'img-014', filename: 'arctic-fox.jpg',      category: 'Nature',       difficulty: 'Medium', title: 'Arctic Fox' },
+  { id: 'img-015', filename: 'art-deco.jpg',        category: 'Architecture', difficulty: 'Hard',   title: 'Art Deco Interior' },
+  { id: 'img-016', filename: 'tulip-fields.jpg',    category: 'Nature',       difficulty: 'Easy',   title: 'Tulip Fields' },
+  { id: 'img-017', filename: 'steampunk.jpg',       category: 'Concept Art',  difficulty: 'Hard',   title: 'Steampunk City' },
+  { id: 'img-018', filename: 'greek-island.jpg',    category: 'Photography',  difficulty: 'Easy',   title: 'Greek Island' },
+  { id: 'img-019', filename: 'cubist-portrait.jpg', category: 'Fine Art',     difficulty: 'Hard',   title: 'Cubist Portrait' },
+  { id: 'img-020', filename: 'waterfall.jpg',       category: 'Nature',       difficulty: 'Medium', title: 'Jungle Waterfall' },
 ];
 
 function getRandomImage(usedIds = []) {
@@ -110,16 +193,18 @@ function getRandomImage(usedIds = []) {
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 function calculateScore({ similarityScore, tokensUsed, tokenBudget, submissionTimeMs, roundDurationMs }) {
-  const simScore = Math.min(100, Math.max(0, similarityScore)) * 0.60;
-  const savedTokens = Math.max(0, tokenBudget - tokensUsed);
-  const effScore = (savedTokens / tokenBudget) * 100 * 0.25;
+  const simScore       = Math.min(100, Math.max(0, similarityScore)) * 0.60;
+  const savedTokens    = Math.max(0, tokenBudget - tokensUsed);
+  const effScore       = (savedTokens / tokenBudget) * 100 * 0.25;
   const normalizedTime = Math.max(0, Math.min(1, submissionTimeMs / roundDurationMs));
-  const speedScore = (1 - normalizedTime) * 100 * 0.15;
+  const speedScore     = (1 - normalizedTime) * 100 * 0.15;
   return Math.round(simScore + effScore + speedScore);
 }
 
-// ─── Socket.io Game Logic ─────────────────────────────────────────────────────
+// ─── Server Start ────────────────────────────────────────────────────────────
 app.prepare().then(() => {
+  initFirebase();
+
   const httpServer = createServer(async (req, res) => {
     const parsedUrl = parse(req.url, true);
     await handle(req, res, parsedUrl);
@@ -133,8 +218,8 @@ app.prepare().then(() => {
     console.log(`[Socket] Connected: ${socket.id}`);
 
     // ── Create Room ──────────────────────────────────────────────────────────
-    socket.on('create-room', ({ playerName }) => {
-      const room = createRoom(socket.id, playerName || 'Player 1');
+    socket.on('create-room', ({ playerName, firebaseUid, teamId }) => {
+      const room = createRoom(socket.id, playerName || 'Player 1', firebaseUid, teamId || null);
       room.scores.set(socket.id, { total: 0, roundScores: [] });
       socket.join(room.code);
       socket.emit('room-created', { code: room.code, state: getRoomState(room) });
@@ -142,12 +227,21 @@ app.prepare().then(() => {
     });
 
     // ── Join Room ────────────────────────────────────────────────────────────
-    socket.on('join-room', ({ roomCode, playerName }) => {
+    socket.on('join-room', async ({ roomCode, playerName, firebaseUid }) => {
       const code = roomCode.toUpperCase();
       const room = rooms.get(code);
       if (!room) { socket.emit('error', { message: 'Room not found!' }); return; }
       if (room.phase !== 'lobby') { socket.emit('error', { message: 'Game already in progress!' }); return; }
       if (room.players.size >= 8) { socket.emit('error', { message: 'Room is full (8 players max)!' }); return; }
+
+      // Team membership check
+      if (room.teamId) {
+        const allowed = await validateTeamMembership(room.teamId, firebaseUid);
+        if (!allowed) {
+          socket.emit('error', { message: 'You are not a member of this team!' });
+          return;
+        }
+      }
 
       room.players.set(socket.id, {
         id: socket.id,
@@ -155,6 +249,7 @@ app.prepare().then(() => {
         isReady: false,
         isHost: false,
         avatar: getAvatar(playerName || 'Player'),
+        firebaseUid: firebaseUid || null,
       });
       room.scores.set(socket.id, { total: 0, roundScores: [] });
       socket.join(code);
@@ -185,7 +280,7 @@ app.prepare().then(() => {
     socket.on('submit-prompt', ({ roomCode, prompt, imageData, tokensUsed }) => {
       const room = rooms.get(roomCode);
       if (!room || room.phase !== 'playing') return;
-      if (room.submissions.has(socket.id)) return; // already submitted
+      if (room.submissions.has(socket.id)) return;
 
       const submittedAt = Date.now();
       const submissionTimeMs = submittedAt - room.roundStartTime;
@@ -194,11 +289,34 @@ app.prepare().then(() => {
       io.to(roomCode).emit('player-submitted', { playerId: socket.id, playerName: room.players.get(socket.id)?.name });
       io.to(roomCode).emit('room-update', getRoomState(room));
 
-      // If all players submitted, move to scoring early
       if (room.submissions.size >= room.players.size) {
         clearTimeout(room.roundTimer);
         startScoring(io, room);
       }
+    });
+
+    // ── Next Round ───────────────────────────────────────────────────────────
+    socket.on('next-round', ({ roomCode }) => {
+      const room = rooms.get(roomCode);
+      if (!room || room.hostId !== socket.id) return;
+      if (room.currentRound >= room.totalRounds) {
+        endGame(io, room);
+      } else {
+        startNextRound(io, room);
+      }
+    });
+
+    // ── Play Again ───────────────────────────────────────────────────────────
+    socket.on('play-again', ({ roomCode }) => {
+      const room = rooms.get(roomCode);
+      if (!room || room.hostId !== socket.id) return;
+      room.currentRound = 0;
+      room.submissions.clear();
+      room.roundResults = [];
+      room.scores.forEach((s) => { s.total = 0; s.roundScores = []; });
+      room.phase = 'lobby';
+      room.players.forEach(p => { p.isReady = false; });
+      io.to(roomCode).emit('room-update', getRoomState(room));
     });
 
     // ── Disconnect ───────────────────────────────────────────────────────────
@@ -223,29 +341,6 @@ app.prepare().then(() => {
         }
       });
     });
-
-    // ── Next Round ───────────────────────────────────────────────────────────
-    socket.on('next-round', ({ roomCode }) => {
-      const room = rooms.get(roomCode);
-      if (!room || room.hostId !== socket.id) return;
-      if (room.currentRound >= room.totalRounds) {
-        endGame(io, room);
-      } else {
-        startNextRound(io, room);
-      }
-    });
-
-    socket.on('play-again', ({ roomCode }) => {
-      const room = rooms.get(roomCode);
-      if (!room || room.hostId !== socket.id) return;
-      room.currentRound = 0;
-      room.submissions.clear();
-      room.roundResults = [];
-      room.scores.forEach((s) => { s.total = 0; s.roundScores = []; });
-      room.phase = 'lobby';
-      room.players.forEach(p => { p.isReady = false; });
-      io.to(roomCode).emit('room-update', getRoomState(room));
-    });
   });
 
   function startNextRound(io, room) {
@@ -254,11 +349,10 @@ app.prepare().then(() => {
     room.submissions.clear();
     room.roundResults = [];
 
-    const usedIds = room.players.size > 0 ? [] : [];
-    const image = getRandomImage(usedIds);
+    const image = getRandomImage([]);
     room.currentImageId = image.id;
 
-    io.to(room.code).emit('room-update', getRoomState(room));
+    // Send all round data upfront — client drives visual countdown locally
     io.to(room.code).emit('game-start', {
       round: room.currentRound,
       totalRounds: room.totalRounds,
@@ -267,14 +361,13 @@ app.prepare().then(() => {
       duration: ROUND_DURATION_MS,
     });
 
-    // Countdown: 3 seconds before game starts
+    // 3 seconds countdown on server before opening for submissions
     setTimeout(() => {
       room.phase = 'playing';
       room.roundStartTime = Date.now();
       io.to(room.code).emit('round-playing', { startTime: room.roundStartTime });
       io.to(room.code).emit('room-update', getRoomState(room));
 
-      // Timer ticks every second
       let timeLeft = ROUND_DURATION_MS / 1000;
       const tickInterval = setInterval(() => {
         timeLeft--;
@@ -282,7 +375,6 @@ app.prepare().then(() => {
         if (timeLeft <= 0) clearInterval(tickInterval);
       }, 1000);
 
-      // Auto-end round when time expires
       room.roundTimer = setTimeout(() => {
         clearInterval(tickInterval);
         startScoring(io, room);
@@ -295,7 +387,6 @@ app.prepare().then(() => {
     io.to(room.code).emit('room-update', getRoomState(room));
     io.to(room.code).emit('scoring-started', { message: 'Gemini is judging your prompts...' });
 
-    const currentImage = REFERENCE_IMAGES.find(img => img.id === room.currentImageId);
     const results = [];
 
     for (const [playerId, submission] of room.submissions.entries()) {
@@ -303,7 +394,8 @@ app.prepare().then(() => {
       if (!player) continue;
 
       let similarityScore = 0;
-      let reasoning = 'No image submitted.';
+      let reasoning       = 'No image submitted.';
+      let scoreBreakdown  = {};
 
       if (submission.imageData) {
         try {
@@ -317,19 +409,19 @@ app.prepare().then(() => {
           });
           const data = await response.json();
           similarityScore = data.similarityScore ?? 0;
-          reasoning = data.reasoning ?? '';
+          reasoning       = data.reasoning ?? '';
+          scoreBreakdown  = data.breakdown ?? {};
         } catch (err) {
           console.error('[Scoring] Error:', err);
-          similarityScore = 0;
         }
       }
 
       const roundScore = calculateScore({
         similarityScore,
-        tokensUsed: submission.tokensUsed || 0,
-        tokenBudget: TOKEN_BUDGET,
+        tokensUsed:       submission.tokensUsed || 0,
+        tokenBudget:      TOKEN_BUDGET,
         submissionTimeMs: submission.submissionTimeMs || ROUND_DURATION_MS,
-        roundDurationMs: ROUND_DURATION_MS,
+        roundDurationMs:  ROUND_DURATION_MS,
       });
 
       const playerScore = room.scores.get(playerId);
@@ -340,48 +432,53 @@ app.prepare().then(() => {
 
       results.push({
         playerId,
-        playerName: player.name,
-        playerAvatar: player.avatar,
-        prompt: submission.prompt,
-        imageData: submission.imageData,
-        tokensUsed: submission.tokensUsed,
+        playerName:     player.name,
+        playerAvatar:   player.avatar,
+        prompt:         submission.prompt,
+        imageData:      submission.imageData,
+        tokensUsed:     submission.tokensUsed,
         similarityScore,
+        scoreBreakdown,
         roundScore,
         reasoning,
       });
     }
 
-    // Sort by round score
     results.sort((a, b) => b.roundScore - a.roundScore);
     room.roundResults = results;
     room.phase = 'reveal';
 
+    const scores = Array.from(room.scores.entries()).map(([id, s]) => ({
+      playerId:    id,
+      playerName:  room.players.get(id)?.name,
+      playerAvatar: room.players.get(id)?.avatar,
+      total:       s.total,
+      roundScores: s.roundScores,
+    })).sort((a, b) => b.total - a.total);
+
     io.to(room.code).emit('room-update', getRoomState(room));
     io.to(room.code).emit('results-ready', {
       results,
-      scores: Array.from(room.scores.entries()).map(([id, s]) => ({
-        playerId: id,
-        playerName: room.players.get(id)?.name,
-        playerAvatar: room.players.get(id)?.avatar,
-        total: s.total,
-        roundScores: s.roundScores,
-      })).sort((a, b) => b.total - a.total),
+      scores,
       isLastRound: room.currentRound >= room.totalRounds,
     });
   }
 
-  function endGame(io, room) {
+  async function endGame(io, room) {
     room.phase = 'leaderboard';
     const finalScores = Array.from(room.scores.entries()).map(([id, s]) => ({
-      playerId: id,
-      playerName: room.players.get(id)?.name,
+      playerId:    id,
+      playerName:  room.players.get(id)?.name,
       playerAvatar: room.players.get(id)?.avatar,
-      total: s.total,
+      total:       s.total,
       roundScores: s.roundScores,
     })).sort((a, b) => b.total - a.total);
 
     io.to(room.code).emit('game-over', { finalScores });
     io.to(room.code).emit('room-update', getRoomState(room));
+
+    // Persist to Firestore (non-blocking)
+    persistGameHistory(room, finalScores);
   }
 
   httpServer.listen(port, () => {

@@ -35,9 +35,9 @@ export interface PlayerResult {
   prompt: string;
   imageData: string | null;
   tokensUsed: number;
-  submissionTimeMs: number;
+  submissionTimeMs?: number;
   similarityScore: number;
-  scoreBreakdown: ScoreBreakdown;
+  scoreBreakdown?: ScoreBreakdown;
   totalScore: number;
   reasoning: string;
   rank: number;
