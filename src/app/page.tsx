@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { io } from 'socket.io-client';
+import { getSocket } from '@/lib/socket';
 
 const AVATARS = ['🎨', '🖌️', '🎭', '🦄', '🚀', '🌈', '🔥', '⚡', '🎯', '🌟'];
 
@@ -53,7 +53,6 @@ export default function LandingPage() {
   const [tab, setTab] = useState<'create' | 'join'>('create');
   const [loading, setLoading] = useState<'create' | 'join' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const socketRef = useRef<ReturnType<typeof io> | null>(null);
 
   // Restore name from localStorage
   useEffect(() => {
@@ -66,16 +65,14 @@ export default function LandingPage() {
     localStorage.setItem('promptinary_name', name);
   };
 
-  const connect = (): Promise<ReturnType<typeof io>> => {
+  const connect = (): Promise<ReturnType<typeof getSocket>> => {
     return new Promise((resolve) => {
-      if (socketRef.current?.connected) {
-        resolve(socketRef.current);
+      const socket = getSocket();
+      if (socket.connected) {
+        resolve(socket);
         return;
       }
-      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';
-      const socket = io(socketUrl, { path: '/socket.io', transports: ['websocket', 'polling'] });
-      socketRef.current = socket;
-      socket.on('connect', () => resolve(socket));
+      socket.once('connect', () => resolve(socket));
     });
   };
 
@@ -89,6 +86,8 @@ export default function LandingPage() {
       socket.once('room-created', (data: { code: string; roomCode?: string }) => {
         const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
+        // Tell the room page that this socket is already registered in the room
+        sessionStorage.setItem('promptinary_room', code ?? '');
         router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
@@ -112,6 +111,7 @@ export default function LandingPage() {
       socket.once('room-joined', (data: { code: string; roomCode?: string }) => {
         const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
+        sessionStorage.setItem('promptinary_room', code ?? '');
         router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {

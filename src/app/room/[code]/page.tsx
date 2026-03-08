@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
+import { getSocket } from '@/lib/socket';
 import CountdownTimer from '@/components/CountdownTimer';
 import PlayerList from '@/components/PlayerList';
 import PromptEditor from '@/components/PromptEditor';
@@ -75,15 +76,28 @@ export default function GameRoomPage() {
   // ── Socket lifecycle ──────────────────────────────────────────────────
   useEffect(() => {
     const playerName = localStorage.getItem('promptinary_name') || 'Anonymous';
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';
-    const socket: Socket = io(socketUrl, { path: '/socket.io', transports: ['websocket', 'polling'] });
+    // Reuse the singleton socket — prevents double-joining when navigating
+    // from the landing page which already emitted create-room/join-room.
+    const socket: Socket = getSocket();
     socketRef.current = socket;
 
-    socket.on('connect', () => {
+    const joinIfNeeded = () => {
       update({ isConnected: true, myPlayerId: socket.id ?? null });
-      // Join the room we navigated to
-      socket.emit('join-room', { roomCode: code, playerName });
-    });
+      // Skip join-room if this socket already placed us in this room
+      // (i.e. we just navigated here after create-room or join-room on landing page).
+      const alreadyInRoom = sessionStorage.getItem('promptinary_room') === code;
+      if (!alreadyInRoom) {
+        socket.emit('join-room', { roomCode: code, playerName });
+      }
+      // Clear the flag so back-navigation + re-entry works correctly
+      sessionStorage.removeItem('promptinary_room');
+    };
+
+    if (socket.connected) {
+      joinIfNeeded();
+    } else {
+      socket.once('connect', joinIfNeeded);
+    }
 
     socket.on('disconnect', () => {
       update({ isConnected: false });
@@ -174,6 +188,7 @@ export default function GameRoomPage() {
 
     // ── Room updates (players + powerups) ────────────────────────────────
     socket.on('room-update', (data: {
+      code?: string;
       players: Player[] | Record<string, Player>;
       phase?: string;
       powerups?: Record<string, PowerupId>;
@@ -183,7 +198,9 @@ export default function GameRoomPage() {
         : Object.values(data.players);
       const myId = socket.id ?? '';
       const myPowerup = myId && data.powerups ? (data.powerups[myId] ?? null) : null;
-      update({ players, myPowerup: myPowerup as PowerupId | null });
+      const patch: Partial<GameState> = { players, myPowerup: myPowerup as PowerupId | null };
+      if (data.code) patch.roomCode = data.code;
+      update(patch);
     });
 
     // We received an attack powerup
