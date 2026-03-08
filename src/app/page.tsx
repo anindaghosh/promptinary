@@ -86,8 +86,6 @@ export default function LandingPage() {
       socket.once('room-created', (data: { code: string; roomCode?: string }) => {
         const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        // Tell the room page that this socket is already registered in the room
-        sessionStorage.setItem('promptinary_room', code ?? '');
         router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
@@ -111,7 +109,6 @@ export default function LandingPage() {
       socket.once('room-joined', (data: { code: string; roomCode?: string }) => {
         const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        sessionStorage.setItem('promptinary_room', code ?? '');
         router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {

@@ -81,22 +81,24 @@ export default function GameRoomPage() {
     const socket: Socket = getSocket();
     socketRef.current = socket;
 
-    const joinIfNeeded = () => {
+    // #region agent log
+    fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:useEffect-mount',message:'effect mount',data:{code,socketId:socket.id,connected:socket.connected,active:(socket as unknown as {active:boolean}).active},timestamp:Date.now(),hypothesisId:'H-B,H-E'})}).catch(()=>{});
+    // #endregion
+
+    const joinRoom = () => {
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:joinRoom',message:'emitting join-room',data:{code,socketId:socket.id,connected:socket.connected},timestamp:Date.now(),hypothesisId:'H-A,H-C'})}).catch(()=>{});
+      // #endregion
       update({ isConnected: true, myPlayerId: socket.id ?? null });
-      // Skip join-room if this socket already placed us in this room
-      // (i.e. we just navigated here after create-room or join-room on landing page).
-      const alreadyInRoom = sessionStorage.getItem('promptinary_room') === code;
-      if (!alreadyInRoom) {
-        socket.emit('join-room', { roomCode: code, playerName });
-      }
-      // Clear the flag so back-navigation + re-entry works correctly
-      sessionStorage.removeItem('promptinary_room');
+      // Always emit join-room. The server handles this idempotently:
+      // if the socket is already a player in the room it simply resyncs state.
+      socket.emit('join-room', { roomCode: code, playerName });
     };
 
     if (socket.connected) {
-      joinIfNeeded();
+      joinRoom();
     } else {
-      socket.once('connect', joinIfNeeded);
+      socket.once('connect', joinRoom);
     }
 
     socket.on('disconnect', () => {
@@ -116,6 +118,9 @@ export default function GameRoomPage() {
     });
 
     socket.on('room-joined', (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player; room?: { players: Player[] | Record<string, Player> } }) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:room-joined',message:'room-joined received',data:{code:data.code,playerCount:data.state?.players?.length,socketId:socket.id},timestamp:Date.now(),hypothesisId:'H-F'})}).catch(()=>{});
+      // #endregion
       const rc = data.code ?? data.roomCode ?? code;
       let players: Player[] = [];
       if (data.state?.players) {
@@ -290,11 +295,19 @@ export default function GameRoomPage() {
     });
 
     socket.on('error', (data: { message: string }) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:error',message:'error received from server',data:{error:data.message,socketId:socket.id},timestamp:Date.now(),hypothesisId:'H-F'})}).catch(()=>{});
+      // #endregion
       update({ error: data.message });
     });
 
     return () => {
-      socket.disconnect();
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:cleanup',message:'effect cleanup fired — removing listeners (not disconnecting)',data:{socketId:socket.id,connected:socket.connected},timestamp:Date.now(),hypothesisId:'H-E'})}).catch(()=>{});
+      // #endregion
+      // Do NOT call socket.disconnect() — it would kill the singleton and cause the
+      // server to delete the room. Just remove listeners so they don't pile up on re-mount.
+      socket.removeAllListeners();
       if (freezeIntervalRef.current) clearInterval(freezeIntervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -304,6 +317,9 @@ export default function GameRoomPage() {
   const roomCode = gs.roomCode ?? code;
 
   const setReady = (_isReady: boolean) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:setReady',message:'emitting player-ready',data:{roomCode,socketId:socketRef.current?.id},timestamp:Date.now(),hypothesisId:'H-G'})}).catch(()=>{});
+    // #endregion
     socketRef.current?.emit('player-ready', { roomCode });
   };
 
@@ -380,7 +396,7 @@ export default function GameRoomPage() {
   // ── Derived ───────────────────────────────────────────────────────────
   const myPlayer = gs.players.find(p => p.id === gs.myPlayerId);
   const isHost = myPlayer?.isHost ?? false;
-  const allReady = gs.players.length >= 2 && gs.players.every(p => p.isReady);
+  const allReady = gs.players.length >= 1 && gs.players.every(p => p.isReady);
 
   // ── Render phases ─────────────────────────────────────────────────────
   return (
@@ -591,7 +607,7 @@ function LobbyView({
         players={gs.players}
         myPlayerId={gs.myPlayerId}
         onToggleReady={onToggleReady}
-        canStart={allReady && gs.players.length >= 2}
+        canStart={allReady && gs.players.length >= 1}
         onStartGame={onStartGame}
         isHost={isHost}
       />

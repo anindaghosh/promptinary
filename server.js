@@ -200,9 +200,21 @@ app.prepare().then(() => {
 
     // ── Join Room ────────────────────────────────────────────────────────────
     socket.on('join-room', ({ roomCode, playerName }) => {
-      const code = roomCode.toUpperCase();
+      const code = roomCode ? roomCode.toUpperCase() : roomCode;
       const room = rooms.get(code);
+      // #region agent log
+      const fs=require('fs');try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:join-room',message:'join-room received',data:{roomCode,code,roomExists:!!room,socketId:socket.id,allRoomCodes:Array.from(rooms.keys())},timestamp:Date.now(),hypothesisId:'H-A,H-D,H-C'})+'\n');}catch(e){}
+      // #endregion
       if (!room) { socket.emit('error', { message: 'Room not found!' }); return; }
+
+      // Idempotent join: if this socket is already a player, just resync state.
+      // This happens when the singleton socket navigates from landing → room page.
+      if (room.players.has(socket.id)) {
+        socket.join(code);
+        socket.emit('room-joined', { code, state: getRoomState(room) });
+        return;
+      }
+
       if (room.phase !== 'lobby') { socket.emit('error', { message: 'Game already in progress!' }); return; }
       if (room.players.size >= 8) { socket.emit('error', { message: 'Room is full (8 players max)!' }); return; }
 
@@ -354,6 +366,9 @@ app.prepare().then(() => {
     // ── Disconnect ───────────────────────────────────────────────────────────
     socket.on('disconnect', () => {
       console.log(`[Socket] Disconnected: ${socket.id}`);
+      // #region agent log
+      const fs=require('fs');try{const playerRooms=[];rooms.forEach((r,c)=>{if(r.players.has(socket.id))playerRooms.push(c);});fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:disconnect',message:'socket disconnected',data:{socketId:socket.id,playerInRooms:playerRooms},timestamp:Date.now(),hypothesisId:'H-E'})+'\n');}catch(e){}
+      // #endregion
       rooms.forEach((room, code) => {
         if (room.players.has(socket.id)) {
           room.players.delete(socket.id);
@@ -466,6 +481,9 @@ app.prepare().then(() => {
 
     const currentImage = REFERENCE_IMAGES.find(img => img.id === room.currentImageId);
     const results = [];
+    // #region agent log
+    const fs=require('fs');try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:startScoring',message:'scoring started',data:{roomCode:room.code,submissions:room.submissions.size,currentImageId:room.currentImageId,imageExists:!!currentImage},timestamp:Date.now(),hypothesisId:'H-I1'})+'\n');}catch(e){}
+    // #endregion
 
     for (const [playerId, submission] of room.submissions.entries()) {
       const player = room.players.get(playerId);
@@ -474,8 +492,15 @@ app.prepare().then(() => {
       let similarityScore = 0;
       let reasoning = 'No image submitted.';
 
+      // #region agent log
+      try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:scoring-loop',message:'scoring submission',data:{playerId,hasImageData:!!submission.imageData,imageDataLen:submission.imageData?submission.imageData.length:0,imageDataPrefix:submission.imageData?submission.imageData.substring(0,80):'none'},timestamp:Date.now(),hypothesisId:'H-I1,H-I2'})+'\n');}catch(e){}
+      // #endregion
+
       if (submission.imageData) {
         try {
+          // #region agent log
+          try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:score-fetch-start',message:'calling score-image API',data:{url:`${NEXT_APP_URL}/api/score-image`,refImageId:room.currentImageId},timestamp:Date.now(),hypothesisId:'H-I1'})+'\n');}catch(e){}
+          // #endregion
           const response = await fetch(`${NEXT_APP_URL}/api/score-image`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -485,9 +510,15 @@ app.prepare().then(() => {
             }),
           });
           const data = await response.json();
+          // #region agent log
+          try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:score-fetch-done',message:'score-image API responded',data:{status:response.status,similarityScore:data.similarityScore,reasoning:data.reasoning?.substring(0,100),error:data.error},timestamp:Date.now(),hypothesisId:'H-I1'})+'\n');}catch(e){}
+          // #endregion
           similarityScore = data.similarityScore ?? 0;
           reasoning = data.reasoning ?? '';
         } catch (err) {
+          // #region agent log
+          try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:score-fetch-error',message:'score-image API failed',data:{error:err?.message},timestamp:Date.now(),hypothesisId:'H-I1'})+'\n');}catch(e){}
+          // #endregion
           console.error('[Scoring] Error:', err);
           similarityScore = 0;
         }
@@ -528,6 +559,9 @@ app.prepare().then(() => {
     results.sort((a, b) => b.roundScore - a.roundScore);
     room.roundResults = results;
     room.phase = 'reveal';
+    // #region agent log
+    try{const fs=require('fs');fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:results-ready-emit',message:'emitting results-ready',data:{resultCount:results.length,phase:room.phase,roomCode:room.code},timestamp:Date.now(),hypothesisId:'H-I1,H-I4'})+'\n');}catch(e){}
+    // #endregion
 
     io.to(room.code).emit('room-update', getRoomState(room));
     io.to(room.code).emit('results-ready', {
