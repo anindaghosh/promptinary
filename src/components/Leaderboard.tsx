@@ -75,7 +75,7 @@ export default function Leaderboard({
 
               {/* Avatar */}
               <div className="avatar" style={{ width: 36, height: 36, fontSize: 18 }}>
-                {entry.avatar}
+                {entry.playerAvatar ?? entry.avatar}
               </div>
 
               {/* Name */}

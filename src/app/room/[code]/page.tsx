@@ -95,59 +95,44 @@ export default function GameRoomPage() {
       socket.emit('join-room', { roomCode: code, playerName });
     };
 
+    // #region agent log
+    socket.on('connect', () => { fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:on-connect',message:'socket connect/reconnect fired',data:{socketId:socket.id,code},timestamp:Date.now(),hypothesisId:'H-I5'})}).catch(()=>{}); });
+    // #endregion
+
     if (socket.connected) {
       joinRoom();
     } else {
       socket.once('connect', joinRoom);
     }
 
-    socket.on('disconnect', () => {
+    // ── Named handlers — stored so cleanup can remove exactly these, without
+    // touching socket.io's own internal event machinery (heartbeat etc.)
+    const onDisconnect = (reason: string) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:on-disconnect',message:'client socket disconnected',data:{reason,socketId:socket.id,code},timestamp:Date.now(),hypothesisId:'H-I5'})}).catch(()=>{});
+      // #endregion
       update({ isConnected: false });
-    });
+    };
 
-    // Server sends { code, state } where state = getRoomState(room)
-    socket.on('room-created', (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player }) => {
+    const onRoomCreated = (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player }) => {
       const rc = data.code ?? data.roomCode ?? code;
       const players = data.state?.players ?? (data.player ? [data.player] : []);
-      update({
-        phase: 'lobby',
-        roomCode: rc,
-        players,
-        error: null,
-      });
-    });
+      update({ phase: 'lobby', roomCode: rc, players, error: null });
+    };
 
-    socket.on('room-joined', (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player; room?: { players: Player[] | Record<string, Player> } }) => {
+    const onRoomJoined = (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player; room?: { players: Player[] | Record<string, Player> } }) => {
       // #region agent log
       fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:room-joined',message:'room-joined received',data:{code:data.code,playerCount:data.state?.players?.length,socketId:socket.id},timestamp:Date.now(),hypothesisId:'H-F'})}).catch(()=>{});
       // #endregion
       const rc = data.code ?? data.roomCode ?? code;
       let players: Player[] = [];
-      if (data.state?.players) {
-        players = data.state.players;
-      } else if (data.room?.players) {
-        players = Array.isArray(data.room.players)
-          ? data.room.players
-          : Object.values(data.room.players);
-      } else if (data.player) {
-        players = [data.player];
-      }
-      update({
-        phase: 'lobby',
-        roomCode: rc,
-        players,
-        error: null,
-      });
-    });
+      if (data.state?.players) players = data.state.players;
+      else if (data.room?.players) players = Array.isArray(data.room.players) ? data.room.players : Object.values(data.room.players);
+      else if (data.player) players = [data.player];
+      update({ phase: 'lobby', roomCode: rc, players, error: null });
+    };
 
-    socket.on('game-start', (data: {
-      countdown?: number;
-      round?: number;
-      totalRounds?: number;
-      image?: ReferenceImage;
-      tokenBudget?: number;
-      duration?: number;
-    }) => {
+    const onGameStart = (data: { countdown?: number; round?: number; totalRounds?: number; image?: ReferenceImage; tokenBudget?: number; duration?: number }) => {
       update({
         phase: 'countdown',
         countdownValue: data.countdown ?? 3,
@@ -157,70 +142,38 @@ export default function GameRoomPage() {
         ...(data.image !== undefined && { referenceImage: data.image }),
         ...(data.tokenBudget !== undefined && { tokenBudget: data.tokenBudget }),
         ...(data.duration !== undefined && { roundDurationMs: data.duration, timeRemaining: Math.ceil(data.duration / 1000) }),
-        powerupUsed: false,
-        isFrozen: false,
-        frozenSecondsLeft: 0,
-        hasShield: false,
-        hasDoublePoints: false,
-        hintKeywords: [],
-        revealedCategory: null,
-        powerupNotification: null,
-        tokenDrainAmount: 0,
-        submittedThisRound: false,
-        results: [],
+        powerupUsed: false, isFrozen: false, frozenSecondsLeft: 0,
+        hasShield: false, hasDoublePoints: false, hintKeywords: [],
+        revealedCategory: null, powerupNotification: null, tokenDrainAmount: 0,
+        submittedThisRound: false, results: [],
       });
-    });
+    };
 
-    socket.on('countdown-tick', (data: { value: number }) => {
-      update({ countdownValue: data.value });
-    });
+    const onCountdownTick = (data: { value: number }) => update({ countdownValue: data.value });
 
-    socket.on('round-playing', (_data: { startTime?: number }) => {
-      setGeneratedImage(null);
-      setGenError(null);
-      setGenerating(false);
+    const onRoundPlaying = (_data: { startTime?: number }) => {
+      setGeneratedImage(null); setGenError(null); setGenerating(false);
       update({ phase: 'playing' });
-    });
+    };
 
-    socket.on('timer-tick', (data: { timeRemaining?: number; timeLeft?: number }) => {
-      const t = data.timeRemaining ?? data.timeLeft ?? 0;
-      update({ timeRemaining: t });
-    });
+    const onTimerTick = (data: { timeRemaining?: number; timeLeft?: number }) =>
+      update({ timeRemaining: data.timeRemaining ?? data.timeLeft ?? 0 });
 
-    socket.on('player-submitted', (data: { playerId: string; waitingFor: number }) => {
+    const onPlayerSubmitted = (data: { playerId: string; waitingFor: number }) =>
       update({ waitingForPlayers: data.waitingFor });
-    });
 
-    // ── Room updates (players + powerups) ────────────────────────────────
-    socket.on('room-update', (data: {
-      code?: string;
-      players: Player[] | Record<string, Player>;
-      phase?: string;
-      powerups?: Record<string, PowerupId>;
-    }) => {
-      const players = Array.isArray(data.players)
-        ? data.players
-        : Object.values(data.players);
+    const onRoomUpdate = (data: { code?: string; players: Player[] | Record<string, Player>; phase?: string; powerups?: Record<string, PowerupId> }) => {
+      const players = Array.isArray(data.players) ? data.players : Object.values(data.players);
       const myId = socket.id ?? '';
       const myPowerup = myId && data.powerups ? (data.powerups[myId] ?? null) : null;
       const patch: Partial<GameState> = { players, myPowerup: myPowerup as PowerupId | null };
       if (data.code) patch.roomCode = data.code;
       update(patch);
-    });
+    };
 
-    // We received an attack powerup
-    socket.on('powerup-received', (data: {
-      powerupId: PowerupId;
-      casterId: string;
-      casterName: string;
-      amount?: number;
-      duration?: number;
-    }) => {
+    const onPowerupReceived = (data: { powerupId: PowerupId; casterId: string; casterName: string; amount?: number; duration?: number }) => {
       if (data.powerupId === 'TOKEN_DRAIN') {
-        update({
-          tokenDrainAmount: data.amount ?? 20,
-          powerupNotification: { message: `⚡ ${data.casterName} drained 20 tokens from you!`, type: 'attack' },
-        });
+        update({ tokenDrainAmount: data.amount ?? 20, powerupNotification: { message: `⚡ ${data.casterName} drained 20 tokens from you!`, type: 'attack' } });
         setTimeout(() => update({ powerupNotification: null }), 4000);
       } else if (data.powerupId === 'FREEZE') {
         if (freezeIntervalRef.current) clearInterval(freezeIntervalRef.current);
@@ -228,86 +181,89 @@ export default function GameRoomPage() {
         update({ isFrozen: true, frozenSecondsLeft: secs, powerupNotification: { message: `❄️ ${data.casterName} froze your timer for ${secs}s!`, type: 'attack' } });
         freezeIntervalRef.current = setInterval(() => {
           secs--;
-          if (secs <= 0) {
-            clearInterval(freezeIntervalRef.current!);
-            freezeIntervalRef.current = null;
-            update({ isFrozen: false, frozenSecondsLeft: 0, powerupNotification: null });
-          } else {
-            update({ frozenSecondsLeft: secs });
-          }
+          if (secs <= 0) { clearInterval(freezeIntervalRef.current!); freezeIntervalRef.current = null; update({ isFrozen: false, frozenSecondsLeft: 0, powerupNotification: null }); }
+          else update({ frozenSecondsLeft: secs });
         }, 1000);
       }
-    });
+    };
 
-    // Our own powerup self-effects (shield, hint, double, category)
-    socket.on('powerup-self', (data: {
-      powerupId: PowerupId;
-      message?: string;
-      hints?: string[];
-      category?: string;
-      difficulty?: string;
-    }) => {
-      if (data.powerupId === 'TOKEN_SHIELD') {
-        update({ hasShield: true, powerupNotification: { message: '🛡️ Shield activated! You are protected from the next attack.', type: 'defend' } });
-        setTimeout(() => update({ powerupNotification: null }), 4000);
-      } else if (data.powerupId === 'HINT') {
-        update({ hintKeywords: data.hints ?? [], powerupNotification: { message: `💡 Hint revealed: ${(data.hints ?? []).join(', ')}`, type: 'info' } });
-        setTimeout(() => update({ powerupNotification: null }), 6000);
-      } else if (data.powerupId === 'DOUBLE_POINTS') {
-        update({ hasDoublePoints: true, powerupNotification: { message: '⭐ Double Points active! Your score will be doubled.', type: 'info' } });
-        setTimeout(() => update({ powerupNotification: null }), 4000);
-      } else if (data.powerupId === 'CATEGORY') {
-        update({ revealedCategory: `${data.category} · ${data.difficulty}`, powerupNotification: { message: `🏷️ Category revealed: ${data.category} (${data.difficulty})`, type: 'info' } });
-        setTimeout(() => update({ powerupNotification: null }), 6000);
-      }
-    });
+    const onPowerupSelf = (data: { powerupId: PowerupId; hints?: string[]; category?: string; difficulty?: string }) => {
+      if (data.powerupId === 'TOKEN_SHIELD') { update({ hasShield: true, powerupNotification: { message: '🛡️ Shield activated! You are protected from the next attack.', type: 'defend' } }); setTimeout(() => update({ powerupNotification: null }), 4000); }
+      else if (data.powerupId === 'HINT') { update({ hintKeywords: data.hints ?? [], powerupNotification: { message: `💡 Hint revealed: ${(data.hints ?? []).join(', ')}`, type: 'info' } }); setTimeout(() => update({ powerupNotification: null }), 6000); }
+      else if (data.powerupId === 'DOUBLE_POINTS') { update({ hasDoublePoints: true, powerupNotification: { message: '⭐ Double Points active! Your score will be doubled.', type: 'info' } }); setTimeout(() => update({ powerupNotification: null }), 4000); }
+      else if (data.powerupId === 'CATEGORY') { update({ revealedCategory: `${data.category} · ${data.difficulty}`, powerupNotification: { message: `🏷️ Category revealed: ${data.category} (${data.difficulty})`, type: 'info' } }); setTimeout(() => update({ powerupNotification: null }), 6000); }
+    };
 
-    // Broadcast: someone used a powerup (for feed display)
-    socket.on('powerup-used', (_data: { casterId: string; casterName: string; powerupId: PowerupId; targetId?: string; targetName?: string }) => {
-      // no-op for now; could show a feed
-    });
-
-    // Broadcast: a powerup was blocked by a shield
-    socket.on('powerup-blocked', (data: { casterId: string; casterName: string; targetId: string; targetName?: string; powerupId: PowerupId }) => {
+    const onPowerupBlocked = (data: { casterId: string; casterName: string; targetId: string; targetName?: string; powerupId: PowerupId }) => {
       if (data.targetId === socket.id) {
         update({ hasShield: false, powerupNotification: { message: `🛡️ Your shield blocked ${data.casterName}'s ${data.powerupId.replace('_', ' ')}!`, type: 'defend' } });
         setTimeout(() => update({ powerupNotification: null }), 4000);
       }
-    });
+    };
 
-    socket.on('scoring-started', () => {
-      update({ phase: 'scoring' });
-    });
+    const onScoringStarted = () => update({ phase: 'scoring' });
 
-    socket.on('results-ready', (data: { results: PlayerResult[]; round: number }) => {
+    const onResultsReady = (data: { results: PlayerResult[] }) =>
       update({ phase: 'reveal', results: data.results });
-    });
 
-    socket.on('game-over', (data: { leaderboard: LeaderboardEntry[] }) => {
+    const onGameOver = (data: { leaderboard: LeaderboardEntry[] }) =>
       update({ phase: 'leaderboard', leaderboard: data.leaderboard });
-    });
 
-    socket.on('player-left', (data: { players: Player[] | Record<string, Player> }) => {
-      const players = Array.isArray(data.players)
-        ? data.players
-        : Object.values(data.players);
+    const onPlayerLeft = (data: { players: Player[] | Record<string, Player> }) => {
+      const players = Array.isArray(data.players) ? data.players : Object.values(data.players);
       update({ players });
-    });
+    };
 
-    socket.on('error', (data: { message: string }) => {
+    const onError = (data: { message: string }) => {
       // #region agent log
       fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:error',message:'error received from server',data:{error:data.message,socketId:socket.id},timestamp:Date.now(),hypothesisId:'H-F'})}).catch(()=>{});
       // #endregion
       update({ error: data.message });
-    });
+    };
+
+    socket.on('disconnect', onDisconnect);
+    socket.on('room-created', onRoomCreated);
+    socket.on('room-joined', onRoomJoined);
+    socket.on('game-start', onGameStart);
+    socket.on('countdown-tick', onCountdownTick);
+    socket.on('round-playing', onRoundPlaying);
+    socket.on('timer-tick', onTimerTick);
+    socket.on('player-submitted', onPlayerSubmitted);
+    socket.on('room-update', onRoomUpdate);
+    socket.on('powerup-received', onPowerupReceived);
+    socket.on('powerup-self', onPowerupSelf);
+    socket.on('powerup-used', () => { /* no-op */ });
+    socket.on('powerup-blocked', onPowerupBlocked);
+    socket.on('scoring-started', onScoringStarted);
+    socket.on('results-ready', onResultsReady);
+    socket.on('game-over', onGameOver);
+    socket.on('player-left', onPlayerLeft);
+    socket.on('error', onError);
 
     return () => {
       // #region agent log
-      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:cleanup',message:'effect cleanup fired — removing listeners (not disconnecting)',data:{socketId:socket.id,connected:socket.connected},timestamp:Date.now(),hypothesisId:'H-E'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:cleanup',message:'effect cleanup — removing named listeners only',data:{socketId:socket.id,connected:socket.connected},timestamp:Date.now(),hypothesisId:'H-I5'})}).catch(()=>{});
       // #endregion
-      // Do NOT call socket.disconnect() — it would kill the singleton and cause the
-      // server to delete the room. Just remove listeners so they don't pile up on re-mount.
-      socket.removeAllListeners();
+      // Remove only the handlers WE registered — never call removeAllListeners()
+      // as that strips socket.io's internal heartbeat machinery and causes the
+      // server to drop the connection after ~20s (ping timeout).
+      socket.off('disconnect', onDisconnect);
+      socket.off('room-created', onRoomCreated);
+      socket.off('room-joined', onRoomJoined);
+      socket.off('game-start', onGameStart);
+      socket.off('countdown-tick', onCountdownTick);
+      socket.off('round-playing', onRoundPlaying);
+      socket.off('timer-tick', onTimerTick);
+      socket.off('player-submitted', onPlayerSubmitted);
+      socket.off('room-update', onRoomUpdate);
+      socket.off('powerup-received', onPowerupReceived);
+      socket.off('powerup-self', onPowerupSelf);
+      socket.off('powerup-blocked', onPowerupBlocked);
+      socket.off('scoring-started', onScoringStarted);
+      socket.off('results-ready', onResultsReady);
+      socket.off('game-over', onGameOver);
+      socket.off('player-left', onPlayerLeft);
+      socket.off('error', onError);
       if (freezeIntervalRef.current) clearInterval(freezeIntervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -357,6 +313,9 @@ export default function GameRoomPage() {
         throw new Error(data.error || 'Image generation failed');
       }
       setGeneratedImage(data.imageData);
+      // #region agent log
+      fetch('http://127.0.0.1:7618/ingest/f092a34c-acae-4a79-89ca-333569c38371',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5dffed'},body:JSON.stringify({sessionId:'5dffed',location:'room/page.tsx:submit-prompt-emit',message:'emitting submit-prompt',data:{roomCode,imageSizeBytes:data.imageData?.length,socketId:socketRef.current?.id,socketConnected:socketRef.current?.connected},timestamp:Date.now(),hypothesisId:'H-I5-size'})}).catch(()=>{});
+      // #endregion
       socketRef.current?.emit('submit-prompt', {
         roomCode,
         prompt,

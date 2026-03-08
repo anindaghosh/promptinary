@@ -184,6 +184,9 @@ app.prepare().then(() => {
 
   const io = new Server(httpServer, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
+    // Imagen 3 generates ~1-2MB PNG images sent as base64 via submit-prompt.
+    // Default maxHttpBufferSize is 1MB which silently disconnects the socket.
+    maxHttpBufferSize: 10e6, // 10 MB
   });
 
   io.on('connection', (socket) => {
@@ -252,6 +255,9 @@ app.prepare().then(() => {
 
     // ── Submit Prompt ────────────────────────────────────────────────────────
     socket.on('submit-prompt', ({ roomCode, prompt, imageData, tokensUsed }) => {
+      // #region agent log
+      const fs=require('fs');try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:submit-prompt',message:'submit-prompt received',data:{roomCode,hasImage:!!imageData,imageDataLen:imageData?imageData.length:0,socketId:socket.id},timestamp:Date.now(),hypothesisId:'H-I5-size'})+'\n');}catch(e){}
+      // #endregion
       const room = rooms.get(roomCode);
       if (!room || room.phase !== 'playing') return;
       if (room.submissions.has(socket.id)) return; // already submitted
@@ -364,10 +370,10 @@ app.prepare().then(() => {
     });
 
     // ── Disconnect ───────────────────────────────────────────────────────────
-    socket.on('disconnect', () => {
-      console.log(`[Socket] Disconnected: ${socket.id}`);
+    socket.on('disconnect', (reason) => {
+      console.log(`[Socket] Disconnected: ${socket.id} reason=${reason}`);
       // #region agent log
-      const fs=require('fs');try{const playerRooms=[];rooms.forEach((r,c)=>{if(r.players.has(socket.id))playerRooms.push(c);});fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:disconnect',message:'socket disconnected',data:{socketId:socket.id,playerInRooms:playerRooms},timestamp:Date.now(),hypothesisId:'H-E'})+'\n');}catch(e){}
+      const fs=require('fs');try{const playerRooms=[];rooms.forEach((r,c)=>{if(r.players.has(socket.id))playerRooms.push(c);});fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:disconnect',message:'socket disconnected',data:{socketId:socket.id,reason,playerInRooms:playerRooms},timestamp:Date.now(),hypothesisId:'H-I5'})+'\n');}catch(e){}
       // #endregion
       rooms.forEach((room, code) => {
         if (room.players.has(socket.id)) {
@@ -451,7 +457,13 @@ app.prepare().then(() => {
       duration: ROUND_DURATION_MS,
     });
 
-    // Countdown: 3 seconds before game starts
+    // Countdown: tick 3 → 2 → 1 then start playing
+    [3, 2, 1].forEach((val, i) => {
+      setTimeout(() => {
+        io.to(room.code).emit('countdown-tick', { value: val });
+      }, i * 1000);
+    });
+
     setTimeout(() => {
       room.phase = 'playing';
       room.roundStartTime = Date.now();
@@ -555,8 +567,9 @@ app.prepare().then(() => {
       });
     }
 
-    // Sort by round score
+    // Sort by round score and assign rank
     results.sort((a, b) => b.roundScore - a.roundScore);
+    results.forEach((r, i) => { r.rank = i + 1; });
     room.roundResults = results;
     room.phase = 'reveal';
     // #region agent log
@@ -579,15 +592,17 @@ app.prepare().then(() => {
 
   function endGame(io, room) {
     room.phase = 'leaderboard';
-    const finalScores = Array.from(room.scores.entries()).map(([id, s]) => ({
+    const leaderboard = Array.from(room.scores.entries()).map(([id, s]) => ({
       playerId: id,
       playerName: room.players.get(id)?.name,
       playerAvatar: room.players.get(id)?.avatar,
-      total: s.total,
+      avatar: room.players.get(id)?.avatar,
+      totalScore: s.total,
       roundScores: s.roundScores,
-    })).sort((a, b) => b.total - a.total);
+    })).sort((a, b) => b.totalScore - a.totalScore)
+      .map((entry, i) => ({ ...entry, rank: i + 1 }));
 
-    io.to(room.code).emit('game-over', { finalScores });
+    io.to(room.code).emit('game-over', { leaderboard, finalScores: leaderboard });
     io.to(room.code).emit('room-update', getRoomState(room));
   }
 

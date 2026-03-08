@@ -31,22 +31,25 @@ export interface ScoreBreakdown {
 export interface PlayerResult {
   playerId: string;
   playerName: string;
-  avatar: string;
+  playerAvatar?: string;
+  avatar?: string;
   prompt: string;
   imageData: string | null;
   tokensUsed: number;
-  submissionTimeMs: number;
+  submissionTimeMs?: number;
   similarityScore: number;
-  scoreBreakdown: ScoreBreakdown;
-  totalScore: number;
+  scoreBreakdown?: ScoreBreakdown;
+  roundScore?: number;    // server field
+  totalScore?: number;   // alias used by some components
   reasoning: string;
-  rank: number;
+  rank?: number;
 }
 
 export interface LeaderboardEntry {
   playerId: string;
   playerName: string;
-  avatar: string;
+  playerAvatar?: string;
+  avatar?: string;
   totalScore: number;
   rank: number;
 }
