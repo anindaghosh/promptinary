@@ -1,95 +1,110 @@
+import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleAuth } from 'google-auth-library';
 import { NextRequest, NextResponse } from 'next/server';
-import { adminStorage } from '@/lib/firebase-admin';
-import { createGenAI } from '@/lib/genai';
+import { ensureVertexCredentials } from '@/lib/vertex-credentials';
 
-const STORAGE_BUCKET = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || '';
-
-async function uploadToStorage(base64Data: string, path: string): Promise<string | null> {
-  if (!STORAGE_BUCKET) return null;
-  try {
-    const bucket = adminStorage.bucket(STORAGE_BUCKET);
-    const file   = bucket.file(path);
-    const clean  = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
-    const buffer = Buffer.from(clean, 'base64');
-    await file.save(buffer, { metadata: { contentType: 'image/png' } });
-    await file.makePublic();
-    return `https://storage.googleapis.com/${STORAGE_BUCKET}/${path}`;
-  } catch (err: any) {
-    console.warn('[generate-image] Storage upload failed:', err?.message);
-    return null;
-  }
-}
+const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || '';
+const LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+const IMAGE_GEN_MODEL = process.env.IMAGE_GEN_MODEL || 'imagen-3.0-generate-002';
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const { prompt, roomCode, round, uid } = body;
+    ensureVertexCredentials();
+    const body = await req.json();
+    const { prompt } = body;
 
-  if (!prompt || typeof prompt !== 'string') {
-    return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
-  }
-  if (!process.env.GOOGLE_CLOUD_PROJECT) {
-    return NextResponse.json({ error: 'GOOGLE_CLOUD_PROJECT not configured' }, { status: 500 });
-  }
-
-  const storagePath = `generated-images/${roomCode ?? 'unknown'}/${round ?? 0}/${uid ?? 'anon'}-${Date.now()}.png`;
-
-  const ai = createGenAI();
-
-  // ── Attempt 1: Imagen 3 ───────────────────────────────────────────────────
-  try {
-    const response = await ai.models.generateImages({
-      model:  'imagen-3.0-generate-002',
-      prompt,
-      config: {
-        numberOfImages: 1,
-        aspectRatio:    '1:1',
-        // @ts-ignore — safetyFilterLevel is valid but not in current typings
-        safetyFilterLevel: 'BLOCK_SOME',
-      },
-    });
-
-    const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
-    if (imageBytes) {
-      const imageUrl = await uploadToStorage(imageBytes, storagePath);
-      return NextResponse.json({
-        imageUrl:  imageUrl ?? undefined,
-        imageData: imageUrl ? undefined : `data:image/png;base64,${imageBytes}`,
-        success: true,
-      });
-    }
-  } catch (imagenErr: any) {
-    console.warn('[generate-image] Imagen 3 failed, trying Gemini fallback:', imagenErr?.message);
-  }
-
-  // ── Attempt 2: Gemini image generation ────────────────────────────────────
-  try {
-    const response = await ai.models.generateContent({
-      model:    'gemini-2.0-flash-preview-image-generation',
-      contents: [{ role: 'user', parts: [{ text: `Generate a high-quality image: ${prompt}` }] }],
-      config:   { responseModalities: ['IMAGE', 'TEXT'] },
-    });
-
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const imagePart = parts.find((p: any) => p.inlineData?.data);
-
-    if (imagePart?.inlineData) {
-      const base64Data: string = imagePart.inlineData.data ?? '';
-      const mimeType: string   = imagePart.inlineData.mimeType ?? 'image/png';
-      const imageUrl = await uploadToStorage(base64Data, storagePath);
-      return NextResponse.json({
-        imageUrl:  imageUrl ?? undefined,
-        imageData: imageUrl ? undefined : `data:${mimeType};base64,${base64Data}`,
-        success:   true,
-        usedFallback: true,
-      });
+    if (!prompt || typeof prompt !== 'string') {
+        return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    throw new Error('No image returned by Gemini');
-  } catch (fallbackErr: any) {
-    console.error('[generate-image] Both models failed:', fallbackErr?.message);
-    return NextResponse.json(
-      { error: 'Image generation failed', details: fallbackErr?.message },
-      { status: 500 }
-    );
-  }
+    if (!PROJECT_ID) {
+        return NextResponse.json({ error: 'GOOGLE_CLOUD_PROJECT not configured' }, { status: 500 });
+    }
+
+    // Imagen uses the predict REST endpoint, not the Gemini generateContent API.
+    try {
+        const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        const client = await auth.getClient();
+        const token = await client.getAccessToken();
+
+        const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${IMAGE_GEN_MODEL}:predict`;
+
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                instances: [{ prompt }],
+                parameters: {
+                    sampleCount: 1,
+                    aspectRatio: '1:1',
+                    safetySetting: 'block_medium_and_above',
+                    personGeneration: 'allow_adult',
+                },
+            }),
+        });
+
+        if (!res.ok) {
+            const errBody = await res.text();
+            throw new Error(`Imagen API ${res.status}: ${errBody}`);
+        }
+
+        const data = await res.json();
+        const prediction = data.predictions?.[0];
+
+        if (prediction?.bytesBase64Encoded) {
+            const mimeType = prediction.mimeType || 'image/png';
+            return NextResponse.json({
+                imageData: `data:${mimeType};base64,${prediction.bytesBase64Encoded}`,
+                success: true,
+            });
+        }
+
+        throw new Error('No image in Imagen response');
+    } catch (imagenError: unknown) {
+        const msg = imagenError instanceof Error ? imagenError.message : String(imagenError);
+        console.warn('[generate-image] Imagen 3 failed, trying Gemini fallback:', msg);
+    }
+
+    // Fallback: Gemini 2.0 Flash with native image output
+    try {
+        const vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
+        const model = vertexAI.preview.getGenerativeModel({
+            model: 'gemini-2.0-flash-preview-image-generation',
+        });
+
+        const response = await model.generateContent({
+            contents: [{
+                role: 'user',
+                parts: [{ text: `Generate a high-quality image: ${prompt}` }],
+            }],
+            generationConfig: {
+                // @ts-expect-error — image output config not in SDK types yet
+                responseModalities: ['IMAGE', 'TEXT'],
+            },
+        });
+
+        const candidate = response.response.candidates?.[0];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const imagePart = candidate?.content?.parts?.find((p: any) => p.inlineData);
+
+        if (imagePart?.inlineData) {
+            const { data: base64Data, mimeType } = imagePart.inlineData;
+            return NextResponse.json({
+                imageData: `data:${mimeType};base64,${base64Data}`,
+                success: true,
+                usedFallback: true,
+            });
+        }
+
+        throw new Error('No image in Gemini response');
+    } catch (fallbackError: unknown) {
+        const msg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        console.error('[generate-image] Fallback also failed:', msg);
+        return NextResponse.json(
+            { error: 'Image generation failed', details: msg },
+            { status: 500 }
+        );
+    }
 }

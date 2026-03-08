@@ -112,7 +112,7 @@ function PlayerResultCard({
           flexShrink: 0,
           boxShadow: 'var(--shadow-sm)',
         }}>
-          {result.avatar}
+          {result.playerAvatar ?? result.avatar}
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 15 }}>
@@ -122,7 +122,7 @@ function PlayerResultCard({
             {result.tokensUsed} tokens used
           </div>
         </div>
-        <AnimatedScore value={result.totalScore} />
+        <AnimatedScore value={result.roundScore ?? result.totalScore ?? 0} />
       </div>
 
       {/* Image comparison */}

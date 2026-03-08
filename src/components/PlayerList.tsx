@@ -62,7 +62,7 @@ export default function PlayerList({
             <div>
               {isMe ? (
                 <button
-                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-primary' : 'btn-ghost'}`}
+                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-primary' : 'btn-coral'}`}
                   onClick={() => onToggleReady(!me?.isReady)}
                 >
                   {me?.isReady ? '✓ Ready' : 'Ready Up'}
@@ -84,10 +84,10 @@ export default function PlayerList({
       })}
 
       {/* Waiting for more players */}
-      {players.length === 1 && (
+      {players.length < 2 && (
         <div style={{
           textAlign: 'center',
-          padding: '12px 16px',
+          padding: '16px',
           fontFamily: 'var(--font-body)',
           fontSize: 13,
           opacity: 0.5,
@@ -95,7 +95,7 @@ export default function PlayerList({
           borderRadius: 'var(--radius-md)',
           marginTop: 4,
         }}>
-          Playing solo — invite friends to join, or start alone!
+          Waiting for more players to join...
         </div>
       )}
 
@@ -107,7 +107,10 @@ export default function PlayerList({
           disabled={!canStart}
           style={{ marginTop: 8 }}
         >
-          {!canStart ? 'Mark yourself ready to start' : 'Start Game ▶'}
+          {!canStart
+            ? `Waiting for players (${players.filter(p => p.isReady).length}/${players.length} ready)`
+            : 'Start Game ▶'
+          }
         </button>
       )}
     </div>
