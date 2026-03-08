@@ -32,7 +32,7 @@ const INITIAL: GameState = {
   myPlayerId: null,
   players: [],
   currentRound: 0,
-  totalRounds: 3,
+  totalRounds: 1,
   referenceImage: null,
   tokenBudget: 120,
   roundDurationMs: 90000,

@@ -15,7 +15,7 @@ const handle = app.getRequestHandler();
 // ─── Game State ─────────────────────────────────────────────────────────────
 const rooms = new Map(); // roomCode → Room
 const ROUND_DURATION_MS = 90_000; // 90 seconds per round
-const TOTAL_ROUNDS = 3;
+const TOTAL_ROUNDS = 1;
 const TOKEN_BUDGET = 120;
 
 // ─── Powerup Definitions ─────────────────────────────────────────────────────
