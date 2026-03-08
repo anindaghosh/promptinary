@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 300" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&amp;display=swap');
+      
+      .logo-text {
+        font-family: 'Archivo Black', 'Arial Black', sans-serif;
+        font-size: 92px;
+        font-weight: 900;
+        fill: #000000;
+        letter-spacing: -2px;
+      }
+    </style>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#F5F4ED" />
+
+  <text x="90" y="180" class="logo-text">Prompt</text>
+
+  <rect x="444" y="84" width="285" height="130" fill="#000000" />
+  
+  <rect x="455" y="70" width="285" height="130" fill="#00917A" />
+
+  <text x="460" y="180" class="logo-text">inary</text>
+</svg>

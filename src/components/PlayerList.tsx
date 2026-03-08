@@ -62,10 +62,10 @@ export default function PlayerList({
             <div>
               {isMe ? (
                 <button
-                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-coral' : 'btn-primary'}`}
+                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-primary' : 'btn-coral'}`}
                   onClick={() => onToggleReady(!me?.isReady)}
                 >
-                  {me?.isReady ? 'Not Ready' : 'Ready ✓'}
+                  {me?.isReady ? '✓ Ready' : 'Ready Up'}
                 </button>
               ) : (
                 <span style={{

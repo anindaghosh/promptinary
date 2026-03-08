@@ -1,10 +1,50 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { io } from 'socket.io-client';
+import { getSocket } from '@/lib/socket';
 
 const AVATARS = ['🎨', '🖌️', '🎭', '🦄', '🚀', '🌈', '🔥', '⚡', '🎯', '🌟'];
+
+const LOGO_URL = process.env.NEXT_PUBLIC_LOGO_URL || '/logo.svg';
+
+function LogoDisplay() {
+  const [imgError, setImgError] = useState(false);
+
+  if (imgError) {
+    return (
+      <>
+        <div style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🎨</div>
+        <h1 style={{
+          fontFamily: 'var(--font-display)',
+          fontWeight: 900,
+          fontSize: 'clamp(32px, 8vw, 44px)',
+          letterSpacing: '-0.03em',
+          color: 'var(--black)',
+          lineHeight: 1.05,
+          marginBottom: 12,
+        }}>
+          Promptinary
+        </h1>
+      </>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center' }}>
+      <Image
+        src={LOGO_URL}
+        alt="Logo"
+        width={560}
+        height={168}
+        style={{ objectFit: 'contain', maxHeight: 168 }}
+        onError={() => setImgError(true)}
+        unoptimized
+      />
+    </div>
+  );
+}
 
 export default function LandingPage() {
   const router = useRouter();
@@ -13,7 +53,6 @@ export default function LandingPage() {
   const [tab, setTab] = useState<'create' | 'join'>('create');
   const [loading, setLoading] = useState<'create' | 'join' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const socketRef = useRef<ReturnType<typeof io> | null>(null);
 
   // Restore name from localStorage
   useEffect(() => {
@@ -26,15 +65,14 @@ export default function LandingPage() {
     localStorage.setItem('promptinary_name', name);
   };
 
-  const connect = (): Promise<ReturnType<typeof io>> => {
+  const connect = (): Promise<ReturnType<typeof getSocket>> => {
     return new Promise((resolve) => {
-      if (socketRef.current?.connected) {
-        resolve(socketRef.current);
+      const socket = getSocket();
+      if (socket.connected) {
+        resolve(socket);
         return;
       }
-      const socket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
-      socketRef.current = socket;
-      socket.on('connect', () => resolve(socket));
+      socket.once('connect', () => resolve(socket));
     });
   };
 
@@ -45,9 +83,10 @@ export default function LandingPage() {
     try {
       const socket = await connect();
       socket.emit('create-room', { playerName: playerName.trim() });
-      socket.once('room-created', (data: { roomCode: string }) => {
+      socket.once('room-created', (data: { code: string; roomCode?: string }) => {
+        const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        router.push(`/room/${data.roomCode}`);
+        router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
         setError(data.message);
@@ -67,9 +106,10 @@ export default function LandingPage() {
     try {
       const socket = await connect();
       socket.emit('join-room', { roomCode: joinCode.trim().toUpperCase(), playerName: playerName.trim() });
-      socket.once('room-joined', (data: { roomCode: string }) => {
+      socket.once('room-joined', (data: { code: string; roomCode?: string }) => {
+        const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        router.push(`/room/${data.roomCode}`);
+        router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
         setError(data.message);
@@ -96,18 +136,7 @@ export default function LandingPage() {
       <div className="page-content" style={{ paddingTop: 60, paddingBottom: 48, display: 'flex', flexDirection: 'column', gap: 0 }}>
         {/* Hero */}
         <div style={{ textAlign: 'center', marginBottom: 40 }} className="animate-slide-up">
-          <div style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🎨</div>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 900,
-            fontSize: 'clamp(32px, 8vw, 44px)',
-            letterSpacing: '-0.03em',
-            color: 'var(--black)',
-            lineHeight: 1.05,
-            marginBottom: 12,
-          }}>
-            Promptinary
-          </h1>
+          <LogoDisplay />
           <p style={{
             fontFamily: 'var(--font-body)',
             fontSize: 15,
@@ -237,8 +266,15 @@ export default function LandingPage() {
           </div>
         )}
 
+        {/* Quick links */}
+        <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
+          <button className="btn btn-ghost" onClick={() => router.push('/leaderboard')}>
+            🏆 Global Leaderboard
+          </button>
+        </div>
+
         {/* How to play */}
-        <div style={{ marginTop: 40 }} className="animate-slide-up stagger-4">
+        <div style={{ marginTop: 28 }} className="animate-slide-up stagger-4">
           <h2 style={{
             fontFamily: 'var(--font-display)',
             fontWeight: 700,

@@ -1,36 +1,104 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Promptinary
+
+**Promptinary** is a competitive multiplayer game where players race to recreate a reference image using AI — but with a strict token budget. You write the prompt, AI generates the image, and a Gemini-powered agent scores you on how close you got, how efficiently you wrote, and how fast you submitted. The fewer words it takes you to nail the image, the better.
+
+It turns prompt engineering from a guessing game into a skill — one that's fast, social, and surprisingly addictive.
+
+---
+
+## How It Works
+
+1. **Join or create a room** — share a room code with friends to start a multiplayer session.
+2. **See the reference image** — a target image is revealed to all players simultaneously.
+3. **Write your prompt** — craft a prompt to recreate the image using an AI image generator, but every token counts against your budget.
+4. **Submit and score** — a Gemini-powered agent evaluates your generated image against the reference, scoring you on visual similarity, prompt efficiency, and submission speed.
+5. **Leaderboard** — the player who nails the image with the fewest words and fastest time wins.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | [Next.js 16](https://nextjs.org) (App Router) |
+| Language | TypeScript |
+| UI | React 19, [Lucide React](https://lucide.dev) |
+| Real-time | [Socket.IO](https://socket.io) (custom Node.js server) |
+| Database / Auth | [Firebase](https://firebase.google.com) (Firestore + Auth) |
+| AI Image Generation | [Google Vertex AI](https://cloud.google.com/vertex-ai) — Imagen 3 |
+| AI Scoring | [Google Gemini](https://deepmind.google/technologies/gemini/) via Vertex AI |
+| Deployment | [Vercel](https://vercel.com) (Next.js app) + [Railway](https://railway.app) (Socket.IO server) |
+| CI/CD | GitHub Actions |
+
+---
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 20+
+- A Firebase project (Firestore + Authentication enabled)
+- A Google Cloud project with Vertex AI API enabled and a service account key
+
+### Installation
+
+```bash
+git clone https://github.com/anindaghosh/trendsiq-app.git
+cd trendsiq-app
+npm install
+```
+
+### Environment Variables
+
+Copy `.env.example` to `.env.local` and fill in the values:
+
+```bash
+cp .env.example .env.local
+```
+
+| Variable | Description |
+|---|---|
+| `NEXT_PUBLIC_SOCKET_URL` | Socket.IO server URL (leave empty for local dev) |
+| `NEXT_APP_URL` | Your deployed Next.js app URL |
+| `NEXT_PUBLIC_FIREBASE_*` | Firebase client-side config values |
+| `FIREBASE_ADMIN_CLIENT_EMAIL` | Firebase Admin SDK service account email |
+| `FIREBASE_ADMIN_PRIVATE_KEY` | Firebase Admin SDK private key |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID for Vertex AI |
+| `GOOGLE_CLOUD_LOCATION` | GCP region (default: `us-central1`) |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full service account JSON (minified to one line) |
+
+### Running Locally
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The custom `server.js` starts both the Next.js app and the Socket.IO server on [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Building for Production
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## Deployment
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Next.js app** → deployed to [Vercel](https://vercel.com) via GitHub Actions on pushes to `develop`.
+- **Socket.IO server** → deployed to [Railway](https://railway.app); set `NEXT_PUBLIC_SOCKET_URL` to your Railway URL.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Contributors
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| GitHub | Role |
+|---|---|
+| [@anindaghosh](https://github.com/anindaghosh) | Contributor |
+| [@abha224](https://github.com/abha224) | Contributor |
+| [@laxmansrawat](https://github.com/laxmansrawat) | Contributor |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+Built at **Columbia Hack 2026**.
