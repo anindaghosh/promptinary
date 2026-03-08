@@ -84,10 +84,10 @@ export default function PlayerList({
       })}
 
       {/* Waiting for more players */}
-      {players.length < 2 && (
+      {players.length === 1 && (
         <div style={{
           textAlign: 'center',
-          padding: '16px',
+          padding: '12px 16px',
           fontFamily: 'var(--font-body)',
           fontSize: 13,
           opacity: 0.5,
@@ -95,7 +95,7 @@ export default function PlayerList({
           borderRadius: 'var(--radius-md)',
           marginTop: 4,
         }}>
-          Waiting for more players to join...
+          Playing solo — invite friends to join, or start alone!
         </div>
       )}
 
@@ -107,12 +107,7 @@ export default function PlayerList({
           disabled={!canStart}
           style={{ marginTop: 8 }}
         >
-          {!canStart
-            ? players.length < 2
-              ? 'Need at least 2 players'
-              : 'Mark yourself ready to start'
-            : 'Start Game ▶'
-          }
+          {!canStart ? 'Mark yourself ready to start' : 'Start Game ▶'}
         </button>
       )}
     </div>

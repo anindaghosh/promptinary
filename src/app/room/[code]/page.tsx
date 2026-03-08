@@ -3,8 +3,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ref as storageRef, uploadString, getDownloadURL } from 'firebase/storage';
-import { storage } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import CountdownTimer from '@/components/CountdownTimer';
 import PlayerList from '@/components/PlayerList';
@@ -371,29 +369,13 @@ export default function GameRoomPage() {
       });
       const data = await res.json();
 
-      let imagePayload: string | null = null;
-
-      if (data.success && data.imageUrl) {
-        // API returned a Storage URL
-        imagePayload = data.imageUrl;
-        setGeneratedImage(data.imageUrl);
-      } else if (data.success && data.imageData) {
-        // Fallback: upload base64 to Storage ourselves
-        try {
-          const path = `generated-images/${roomCode}/${gs.currentRound}/${user?.uid ?? 'unknown'}.jpg`;
-          const sRef = storageRef(storage, path);
-          await uploadString(sRef, data.imageData, 'data_url');
-          const url = await getDownloadURL(sRef);
-          imagePayload = url;
-          setGeneratedImage(url);
-        } catch {
-          // If Storage upload fails, fall back to base64 (large but functional)
-          imagePayload = data.imageData;
-          setGeneratedImage(data.imageData);
-        }
-      } else {
+      if (!data.success) {
         throw new Error(data.error || 'Image generation failed');
       }
+
+      // Prefer the Storage URL returned by the API; fall back to base64 if Storage isn't set up yet
+      const imagePayload: string | null = data.imageUrl ?? data.imageData ?? null;
+      setGeneratedImage(imagePayload);
 
       socketRef.current?.emit('submit-prompt', {
         roomCode,
@@ -428,7 +410,7 @@ export default function GameRoomPage() {
   // Host can start once they're ready and there are 2+ players.
   // Other players don't all need to be ready — the host controls when to begin.
   const hostIsReady = myPlayer?.isReady ?? false;
-  const allReady = gs.players.length >= 2 && hostIsReady;
+  const allReady = gs.players.length >= 1 && hostIsReady;
   const displayCode = roomCode ?? urlCode;
 
   // ── Render ──────────────────────────────────────────────────────────
@@ -569,7 +551,7 @@ function LobbyView({ gs, isHost, allReady, onToggleReady, onStartGame, onCopyCod
         players={gs.players}
         myPlayerId={gs.mySocketId}
         onToggleReady={onToggleReady}
-        canStart={allReady && gs.players.length >= 2}
+        canStart={allReady && gs.players.length >= 1}
         onStartGame={onStartGame}
         isHost={isHost}
       />
