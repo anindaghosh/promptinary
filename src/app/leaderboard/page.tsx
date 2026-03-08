@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import { useAuth } from '@/contexts/AuthContext';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { db, auth } from '@/lib/firebase';
 
 interface LeaderboardEntry {
   uid: string;
@@ -22,12 +22,18 @@ const MEDALS = ['🥇', '🥈', '🥉'];
 
 export default function LeaderboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
 
-  const [tab, setTab]             = useState<SortKey>('totalScore');
-  const [entries, setEntries]     = useState<LeaderboardEntry[]>([]);
-  const [loadingData, setLoading] = useState(true);
-  const [error, setError]         = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [tab, setTab]                 = useState<SortKey>('totalScore');
+  const [entries, setEntries]         = useState<LeaderboardEntry[]>([]);
+  const [loadingData, setLoading]     = useState(true);
+  const [error, setError]             = useState<string | null>(null);
+
+  // Track auth state without requiring AuthContext
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => setCurrentUser(user));
+    return unsub;
+  }, []);
 
   const loadLeaderboard = useCallback(async (sortKey: SortKey) => {
     setLoading(true);
@@ -52,7 +58,6 @@ export default function LeaderboardPage() {
             gamesPlayed: data.gamesPlayed || 0,
           };
         })
-        // Only show users who have actually played
         .filter(r => r.gamesPlayed > 0);
       setEntries(rows);
     } catch (e: any) {
@@ -64,10 +69,10 @@ export default function LeaderboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!authLoading) loadLeaderboard(tab);
-  }, [tab, authLoading, loadLeaderboard]);
+    loadLeaderboard(tab);
+  }, [tab, loadLeaderboard]);
 
-  const myRank = entries.findIndex(e => e.uid === user?.uid) + 1;
+  const myRank = currentUser ? entries.findIndex(e => e.uid === currentUser.uid) + 1 : 0;
 
   return (
     <div className="page-wrapper">
@@ -100,7 +105,7 @@ export default function LeaderboardPage() {
           </p>
         </div>
 
-        {/* Your rank banner (if you're on the board) */}
+        {/* Your rank banner */}
         {myRank > 0 && !loadingData && (
           <div style={{
             marginBottom: 16, padding: '12px 16px',
@@ -108,12 +113,8 @@ export default function LeaderboardPage() {
             borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 14 }}>
-              Your rank
-            </span>
-            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 900, fontSize: 22 }}>
-              #{myRank}
-            </span>
+            <span style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 14 }}>Your rank</span>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 900, fontSize: 22 }}>#{myRank}</span>
           </div>
         )}
 
@@ -139,7 +140,7 @@ export default function LeaderboardPage() {
                 key={entry.uid}
                 entry={entry}
                 rank={i + 1}
-                isMe={entry.uid === user?.uid}
+                isMe={entry.uid === currentUser?.uid}
                 sortKey={tab}
               />
             ))}
@@ -170,9 +171,9 @@ function LeaderboardRow({ entry, rank, isMe, sortKey }: {
   isMe: boolean;
   sortKey: SortKey;
 }) {
-  const medal  = rank <= 3 ? MEDALS[rank - 1] : null;
-  const score  = sortKey === 'totalScore' ? entry.totalScore : entry.bestScore;
-  const label  = sortKey === 'totalScore' ? 'pts total' : 'pts best';
+  const medal = rank <= 3 ? MEDALS[rank - 1] : null;
+  const score = sortKey === 'totalScore' ? entry.totalScore : entry.bestScore;
+  const label = sortKey === 'totalScore' ? 'pts total' : 'pts best';
 
   return (
     <div

@@ -86,9 +86,10 @@ export default function LandingPage() {
     try {
       const socket = await connect();
       socket.emit('create-room', { playerName: playerName.trim() });
-      socket.once('room-created', (data: { roomCode: string }) => {
+      socket.once('room-created', (data: { code: string; roomCode?: string }) => {
+        const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        router.push(`/room/${data.roomCode}`);
+        router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
         setError(data.message);
@@ -108,9 +109,10 @@ export default function LandingPage() {
     try {
       const socket = await connect();
       socket.emit('join-room', { roomCode: joinCode.trim().toUpperCase(), playerName: playerName.trim() });
-      socket.once('room-joined', (data: { roomCode: string }) => {
+      socket.once('room-joined', (data: { code: string; roomCode?: string }) => {
+        const code = data.code ?? data.roomCode;
         localStorage.setItem('promptinary_socketId', socket.id ?? '');
-        router.push(`/room/${data.roomCode}`);
+        router.push(`/room/${code}`);
       });
       socket.once('error', (data: { message: string }) => {
         setError(data.message);
@@ -269,11 +271,8 @@ export default function LandingPage() {
 
         {/* Quick links */}
         <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
-          <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => router.push('/leaderboard')}>
-            🏆 Leaderboard
-          </button>
-          <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => router.push('/profile')}>
-            👤 Profile
+          <button className="btn btn-ghost" onClick={() => router.push('/leaderboard')}>
+            🏆 Global Leaderboard
           </button>
         </div>
 

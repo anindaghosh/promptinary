@@ -18,6 +18,52 @@ const ROUND_DURATION_MS = 90_000; // 90 seconds per round
 const TOTAL_ROUNDS = 3;
 const TOKEN_BUDGET = 120;
 
+// ─── Powerup Definitions ─────────────────────────────────────────────────────
+const POWERUP_TYPES = {
+  TOKEN_DRAIN:   { id: 'TOKEN_DRAIN',   name: 'Token Drain',   type: 'offensive', emoji: '⚡', description: "Cut opponent's token budget by 20" },
+  FREEZE:        { id: 'FREEZE',        name: 'Freeze',        type: 'offensive', emoji: '❄️',  description: "Pause a player's timer for 10 seconds" },
+  TOKEN_SHIELD:  { id: 'TOKEN_SHIELD',  name: 'Token Shield',  type: 'defensive', emoji: '🛡️', description: 'Block drain attacks for one round' },
+  HINT:          { id: 'HINT',          name: 'Hint',          type: 'utility',   emoji: '💡', description: 'Reveal 2 AI keyword suggestions' },
+  DOUBLE_POINTS: { id: 'DOUBLE_POINTS', name: 'Double Points', type: 'utility',   emoji: '⭐', description: '2× your score next round' },
+  CATEGORY:      { id: 'CATEGORY',      name: 'Category',      type: 'utility',   emoji: '🏷️', description: 'Reveal style tag of reference image' },
+};
+
+// Each player gets one random powerup per round (drawn from this pool)
+const POWERUP_POOL = ['TOKEN_DRAIN', 'FREEZE', 'TOKEN_SHIELD', 'HINT', 'DOUBLE_POINTS', 'CATEGORY'];
+
+function dealPowerups(playerIds) {
+  const dealt = {};
+  for (const id of playerIds) {
+    const pick = POWERUP_POOL[Math.floor(Math.random() * POWERUP_POOL.length)];
+    dealt[id] = pick;
+  }
+  return dealt;
+}
+
+// Keyword hints per image id
+const IMAGE_HINTS = {
+  'img-001': ['swirling', 'night sky', 'impasto'],
+  'img-002': ['reflection', 'alpine', 'serene'],
+  'img-003': ['neon', 'rain-slicked', 'futuristic'],
+  'img-004': ['pink petals', 'soft light', 'spring'],
+  'img-005': ['beam', 'rocky coast', 'dusk'],
+  'img-006': ['colorful', 'sky', 'festival'],
+  'img-007': ['coral reef', 'tropical fish', 'blue'],
+  'img-008': ['golden sand', 'ripples', 'arid'],
+  'img-009': ['nebula', 'cosmic', 'purple haze'],
+  'img-010': ['orange leaves', 'forest path', 'fall'],
+  'img-011': ['lanterns', 'busy street', 'evening'],
+  'img-012': ['fluid', 'blue waves', 'abstract'],
+  'img-013': ['stone walls', 'overgrown', 'medieval'],
+  'img-014': ['white fur', 'snowy', 'wildlife'],
+  'img-015': ['geometric', 'gold accents', '1920s'],
+  'img-016': ['rows', 'colorful', 'Netherlands'],
+  'img-017': ['gears', 'steam', 'Victorian'],
+  'img-018': ['whitewashed', 'blue dome', 'Aegean'],
+  'img-019': ['fragmented', 'geometric faces', 'Picasso'],
+  'img-020': ['mist', 'lush green', 'tropical'],
+};
+
 function generateRoomCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
@@ -37,6 +83,13 @@ function createRoom(hostId, hostName) {
     submissions: new Map(), // playerId → { prompt, imageData, submittedAt }
     scores: new Map(),      // playerId → { roundScores: [], total }
     roundResults: [],
+    // Powerup state
+    powerups: new Map(),        // playerId → powerupId (current round's dealt card)
+    usedPowerups: new Map(),    // playerId → Set of used powerupIds this round
+    shields: new Set(),         // playerIds with active TOKEN_SHIELD
+    doublePoints: new Set(),    // playerIds with DOUBLE_POINTS active next scoring
+    frozenPlayers: new Map(),   // playerId → freeze timeout handle
+    tokenDrains: new Map(),     // playerId → amount drained this round
   };
   room.players.set(hostId, {
     id: hostId,
@@ -76,6 +129,9 @@ function getRoomState(room) {
       roundScores: s.roundScores,
     })),
     roundResults: room.roundResults,
+    powerups: Object.fromEntries(room.powerups),
+    shields: Array.from(room.shields),
+    doublePoints: Array.from(room.doublePoints),
   };
 }
 
@@ -190,7 +246,11 @@ app.prepare().then(() => {
 
       const submittedAt = Date.now();
       const submissionTimeMs = submittedAt - room.roundStartTime;
-      room.submissions.set(socket.id, { prompt, imageData, tokensUsed, submittedAt, submissionTimeMs });
+      // Apply any token drain that was cast on this player
+      const drainedTokens = room.tokenDrains.get(socket.id) || 0;
+      const effectiveBudget = Math.max(0, TOKEN_BUDGET - drainedTokens);
+      const clampedTokensUsed = Math.min(tokensUsed, effectiveBudget);
+      room.submissions.set(socket.id, { prompt, imageData, tokensUsed: clampedTokensUsed, submittedAt, submissionTimeMs });
 
       io.to(roomCode).emit('player-submitted', { playerId: socket.id, playerName: room.players.get(socket.id)?.name });
       io.to(roomCode).emit('room-update', getRoomState(room));
@@ -200,6 +260,95 @@ app.prepare().then(() => {
         clearTimeout(room.roundTimer);
         startScoring(io, room);
       }
+    });
+
+    // ── Use Powerup ──────────────────────────────────────────────────────────
+    socket.on('use-powerup', ({ roomCode, powerupId, targetPlayerId }) => {
+      const room = rooms.get(roomCode);
+      if (!room || room.phase !== 'playing') return;
+
+      const myPowerup = room.powerups.get(socket.id);
+      if (!myPowerup || myPowerup !== powerupId) return; // doesn't own this powerup
+
+      const used = room.usedPowerups.get(socket.id) || new Set();
+      if (used.has(powerupId)) return; // already used
+      used.add(powerupId);
+      room.usedPowerups.set(socket.id, used);
+      room.powerups.delete(socket.id); // consume the card
+
+      const caster = room.players.get(socket.id);
+      const casterName = caster?.name || 'Someone';
+
+      switch (powerupId) {
+        case 'TOKEN_DRAIN': {
+          // Check if target has a shield
+          if (room.shields.has(targetPlayerId)) {
+            room.shields.delete(targetPlayerId);
+            io.to(roomCode).emit('powerup-blocked', {
+              casterId: socket.id, casterName,
+              targetId: targetPlayerId,
+              targetName: room.players.get(targetPlayerId)?.name,
+              powerupId,
+            });
+          } else {
+            const existing = room.tokenDrains.get(targetPlayerId) || 0;
+            room.tokenDrains.set(targetPlayerId, existing + 20);
+            const target = io.sockets.sockets.get(targetPlayerId);
+            if (target) {
+              target.emit('powerup-received', { powerupId: 'TOKEN_DRAIN', casterId: socket.id, casterName, amount: 20 });
+            }
+            io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId, targetId: targetPlayerId, targetName: room.players.get(targetPlayerId)?.name });
+          }
+          break;
+        }
+        case 'FREEZE': {
+          if (room.shields.has(targetPlayerId)) {
+            room.shields.delete(targetPlayerId);
+            io.to(roomCode).emit('powerup-blocked', {
+              casterId: socket.id, casterName,
+              targetId: targetPlayerId,
+              targetName: room.players.get(targetPlayerId)?.name,
+              powerupId,
+            });
+          } else {
+            const target = io.sockets.sockets.get(targetPlayerId);
+            if (target) {
+              target.emit('powerup-received', { powerupId: 'FREEZE', casterId: socket.id, casterName, duration: 10 });
+            }
+            io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId, targetId: targetPlayerId, targetName: room.players.get(targetPlayerId)?.name });
+          }
+          break;
+        }
+        case 'TOKEN_SHIELD': {
+          room.shields.add(socket.id);
+          socket.emit('powerup-self', { powerupId: 'TOKEN_SHIELD', message: 'Shield activated! You are protected from the next attack.' });
+          io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId });
+          break;
+        }
+        case 'HINT': {
+          const hints = IMAGE_HINTS[room.currentImageId] || ['detailed', 'vivid', 'artistic'];
+          const picked = hints.sort(() => 0.5 - Math.random()).slice(0, 2);
+          socket.emit('powerup-self', { powerupId: 'HINT', hints: picked });
+          io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId });
+          break;
+        }
+        case 'DOUBLE_POINTS': {
+          room.doublePoints.add(socket.id);
+          socket.emit('powerup-self', { powerupId: 'DOUBLE_POINTS', message: 'Double Points activated! Your score this round will be doubled.' });
+          io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId });
+          break;
+        }
+        case 'CATEGORY': {
+          const img = REFERENCE_IMAGES.find(i => i.id === room.currentImageId);
+          socket.emit('powerup-self', { powerupId: 'CATEGORY', category: img?.category || 'Unknown', difficulty: img?.difficulty || 'Unknown' });
+          io.to(roomCode).emit('powerup-used', { casterId: socket.id, casterName, powerupId });
+          break;
+        }
+        default:
+          break;
+      }
+
+      io.to(roomCode).emit('room-update', getRoomState(room));
     });
 
     // ── Disconnect ───────────────────────────────────────────────────────────
@@ -245,6 +394,13 @@ app.prepare().then(() => {
       room.scores.forEach((s) => { s.total = 0; s.roundScores = []; });
       room.phase = 'lobby';
       room.players.forEach(p => { p.isReady = false; });
+      room.powerups.clear();
+      room.usedPowerups.clear();
+      room.shields.clear();
+      room.doublePoints.clear();
+      room.frozenPlayers.forEach(handle => clearTimeout(handle));
+      room.frozenPlayers.clear();
+      room.tokenDrains.clear();
       io.to(roomCode).emit('room-update', getRoomState(room));
     });
   });
@@ -254,6 +410,18 @@ app.prepare().then(() => {
     room.phase = 'countdown';
     room.submissions.clear();
     room.roundResults = [];
+
+    // Reset powerup state for new round
+    room.shields.clear();
+    room.frozenPlayers.forEach(handle => clearTimeout(handle));
+    room.frozenPlayers.clear();
+    room.tokenDrains.clear();
+    room.usedPowerups.clear();
+
+    // Deal one powerup per player
+    const playerIds = Array.from(room.players.keys());
+    const dealt = dealPowerups(playerIds);
+    room.powerups = new Map(Object.entries(dealt));
 
     const usedIds = room.players.size > 0 ? [] : [];
     const image = getRandomImage(usedIds);
@@ -325,13 +493,17 @@ app.prepare().then(() => {
         }
       }
 
-      const roundScore = calculateScore({
+      const baseScore = calculateScore({
         similarityScore,
         tokensUsed: submission.tokensUsed || 0,
         tokenBudget: TOKEN_BUDGET,
         submissionTimeMs: submission.submissionTimeMs || ROUND_DURATION_MS,
         roundDurationMs: ROUND_DURATION_MS,
       });
+
+      const hasDoublePoints = room.doublePoints.has(playerId);
+      const roundScore = hasDoublePoints ? baseScore * 2 : baseScore;
+      if (hasDoublePoints) room.doublePoints.delete(playerId);
 
       const playerScore = room.scores.get(playerId);
       if (playerScore) {

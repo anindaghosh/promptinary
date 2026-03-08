@@ -15,6 +15,8 @@ import {
   PlayerResult,
   LeaderboardEntry,
   GamePhase,
+  PowerupId,
+  POWERUP_DEFS,
 } from '@/hooks/useGameSocket';
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -40,6 +42,16 @@ const INITIAL: GameState = {
   leaderboard: [],
   error: null,
   isConnected: false,
+  myPowerup: null,
+  powerupUsed: false,
+  isFrozen: false,
+  frozenSecondsLeft: 0,
+  hasShield: false,
+  hasDoublePoints: false,
+  hintKeywords: [],
+  revealedCategory: null,
+  powerupNotification: null,
+  tokenDrainAmount: 0,
 };
 
 export default function GameRoomPage() {
@@ -53,6 +65,8 @@ export default function GameRoomPage() {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [powerupTarget, setPowerupTarget] = useState<string | null>(null);
+  const freezeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const update = useCallback((patch: Partial<GameState>) => {
     setGs(prev => ({ ...prev, ...patch }));
@@ -75,74 +89,168 @@ export default function GameRoomPage() {
       update({ isConnected: false });
     });
 
-    socket.on('room-created', (data: { roomCode: string; player: Player }) => {
+    // Server sends { code, state } where state = getRoomState(room)
+    socket.on('room-created', (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player }) => {
+      const rc = data.code ?? data.roomCode ?? code;
+      const players = data.state?.players ?? (data.player ? [data.player] : []);
       update({
         phase: 'lobby',
-        roomCode: data.roomCode,
-        myPlayerId: data.player.id,
-        players: [data.player],
-        error: null,
-      });
-    });
-
-    socket.on('room-joined', (data: { roomCode: string; player: Player; room: { players: Player[] | Record<string, Player> } }) => {
-      const players = Array.isArray(data.room.players)
-        ? data.room.players
-        : Object.values(data.room.players);
-      update({
-        phase: 'lobby',
-        roomCode: data.roomCode,
-        myPlayerId: data.player.id,
+        roomCode: rc,
         players,
         error: null,
       });
     });
 
-    socket.on('room-update', (data: { room: { players: Player[] | Record<string, Player>; phase?: string } }) => {
-      const players = Array.isArray(data.room.players)
-        ? data.room.players
-        : Object.values(data.room.players);
-      update({ players });
+    socket.on('room-joined', (data: { code?: string; roomCode?: string; state?: { players?: Player[] }; player?: Player; room?: { players: Player[] | Record<string, Player> } }) => {
+      const rc = data.code ?? data.roomCode ?? code;
+      let players: Player[] = [];
+      if (data.state?.players) {
+        players = data.state.players;
+      } else if (data.room?.players) {
+        players = Array.isArray(data.room.players)
+          ? data.room.players
+          : Object.values(data.room.players);
+      } else if (data.player) {
+        players = [data.player];
+      }
+      update({
+        phase: 'lobby',
+        roomCode: rc,
+        players,
+        error: null,
+      });
     });
 
-    socket.on('game-start', (data: { countdown: number }) => {
-      update({ phase: 'countdown', countdownValue: data.countdown, error: null });
+    socket.on('game-start', (data: {
+      countdown?: number;
+      round?: number;
+      totalRounds?: number;
+      image?: ReferenceImage;
+      tokenBudget?: number;
+      duration?: number;
+    }) => {
+      update({
+        phase: 'countdown',
+        countdownValue: data.countdown ?? 3,
+        error: null,
+        ...(data.round !== undefined && { currentRound: data.round }),
+        ...(data.totalRounds !== undefined && { totalRounds: data.totalRounds }),
+        ...(data.image !== undefined && { referenceImage: data.image }),
+        ...(data.tokenBudget !== undefined && { tokenBudget: data.tokenBudget }),
+        ...(data.duration !== undefined && { roundDurationMs: data.duration, timeRemaining: Math.ceil(data.duration / 1000) }),
+        powerupUsed: false,
+        isFrozen: false,
+        frozenSecondsLeft: 0,
+        hasShield: false,
+        hasDoublePoints: false,
+        hintKeywords: [],
+        revealedCategory: null,
+        powerupNotification: null,
+        tokenDrainAmount: 0,
+        submittedThisRound: false,
+        results: [],
+      });
     });
 
     socket.on('countdown-tick', (data: { value: number }) => {
       update({ countdownValue: data.value });
     });
 
-    socket.on('round-playing', (data: {
-      round: number;
-      totalRounds: number;
-      image: ReferenceImage;
-      tokenBudget: number;
-      duration: number;
-    }) => {
+    socket.on('round-playing', (_data: { startTime?: number }) => {
       setGeneratedImage(null);
       setGenError(null);
       setGenerating(false);
-      update({
-        phase: 'playing',
-        currentRound: data.round,
-        totalRounds: data.totalRounds,
-        referenceImage: data.image,
-        tokenBudget: data.tokenBudget,
-        roundDurationMs: data.duration,
-        timeRemaining: Math.ceil(data.duration / 1000),
-        submittedThisRound: false,
-        results: [],
-        error: null,
-      });
+      update({ phase: 'playing' });
     });
 
-    socket.on('timer-tick', (data: { timeRemaining: number }) => {
-      update({ timeRemaining: data.timeRemaining });
+    socket.on('timer-tick', (data: { timeRemaining?: number; timeLeft?: number }) => {
+      const t = data.timeRemaining ?? data.timeLeft ?? 0;
+      update({ timeRemaining: t });
     });
 
     socket.on('player-submitted', (data: { playerId: string; waitingFor: number }) => {
       update({ waitingForPlayers: data.waitingFor });
+    });
+
+    // ── Room updates (players + powerups) ────────────────────────────────
+    socket.on('room-update', (data: {
+      players: Player[] | Record<string, Player>;
+      phase?: string;
+      powerups?: Record<string, PowerupId>;
+    }) => {
+      const players = Array.isArray(data.players)
+        ? data.players
+        : Object.values(data.players);
+      const myId = socket.id ?? '';
+      const myPowerup = myId && data.powerups ? (data.powerups[myId] ?? null) : null;
+      update({ players, myPowerup: myPowerup as PowerupId | null });
+    });
+
+    // We received an attack powerup
+    socket.on('powerup-received', (data: {
+      powerupId: PowerupId;
+      casterId: string;
+      casterName: string;
+      amount?: number;
+      duration?: number;
+    }) => {
+      if (data.powerupId === 'TOKEN_DRAIN') {
+        update({
+          tokenDrainAmount: data.amount ?? 20,
+          powerupNotification: { message: `⚡ ${data.casterName} drained 20 tokens from you!`, type: 'attack' },
+        });
+        setTimeout(() => update({ powerupNotification: null }), 4000);
+      } else if (data.powerupId === 'FREEZE') {
+        if (freezeIntervalRef.current) clearInterval(freezeIntervalRef.current);
+        let secs = data.duration ?? 10;
+        update({ isFrozen: true, frozenSecondsLeft: secs, powerupNotification: { message: `❄️ ${data.casterName} froze your timer for ${secs}s!`, type: 'attack' } });
+        freezeIntervalRef.current = setInterval(() => {
+          secs--;
+          if (secs <= 0) {
+            clearInterval(freezeIntervalRef.current!);
+            freezeIntervalRef.current = null;
+            update({ isFrozen: false, frozenSecondsLeft: 0, powerupNotification: null });
+          } else {
+            update({ frozenSecondsLeft: secs });
+          }
+        }, 1000);
+      }
+    });
+
+    // Our own powerup self-effects (shield, hint, double, category)
+    socket.on('powerup-self', (data: {
+      powerupId: PowerupId;
+      message?: string;
+      hints?: string[];
+      category?: string;
+      difficulty?: string;
+    }) => {
+      if (data.powerupId === 'TOKEN_SHIELD') {
+        update({ hasShield: true, powerupNotification: { message: '🛡️ Shield activated! You are protected from the next attack.', type: 'defend' } });
+        setTimeout(() => update({ powerupNotification: null }), 4000);
+      } else if (data.powerupId === 'HINT') {
+        update({ hintKeywords: data.hints ?? [], powerupNotification: { message: `💡 Hint revealed: ${(data.hints ?? []).join(', ')}`, type: 'info' } });
+        setTimeout(() => update({ powerupNotification: null }), 6000);
+      } else if (data.powerupId === 'DOUBLE_POINTS') {
+        update({ hasDoublePoints: true, powerupNotification: { message: '⭐ Double Points active! Your score will be doubled.', type: 'info' } });
+        setTimeout(() => update({ powerupNotification: null }), 4000);
+      } else if (data.powerupId === 'CATEGORY') {
+        update({ revealedCategory: `${data.category} · ${data.difficulty}`, powerupNotification: { message: `🏷️ Category revealed: ${data.category} (${data.difficulty})`, type: 'info' } });
+        setTimeout(() => update({ powerupNotification: null }), 6000);
+      }
+    });
+
+    // Broadcast: someone used a powerup (for feed display)
+    socket.on('powerup-used', (_data: { casterId: string; casterName: string; powerupId: PowerupId; targetId?: string; targetName?: string }) => {
+      // no-op for now; could show a feed
+    });
+
+    // Broadcast: a powerup was blocked by a shield
+    socket.on('powerup-blocked', (data: { casterId: string; casterName: string; targetId: string; targetName?: string; powerupId: PowerupId }) => {
+      if (data.targetId === socket.id) {
+        update({ hasShield: false, powerupNotification: { message: `🛡️ Your shield blocked ${data.casterName}'s ${data.powerupId.replace('_', ' ')}!`, type: 'defend' } });
+        setTimeout(() => update({ powerupNotification: null }), 4000);
+      }
     });
 
     socket.on('scoring-started', () => {
@@ -170,25 +278,28 @@ export default function GameRoomPage() {
 
     return () => {
       socket.disconnect();
+      if (freezeIntervalRef.current) clearInterval(freezeIntervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
   // ── Actions ───────────────────────────────────────────────────────────
-  const setReady = (isReady: boolean) => {
-    socketRef.current?.emit('player-ready', { isReady });
+  const roomCode = gs.roomCode ?? code;
+
+  const setReady = (_isReady: boolean) => {
+    socketRef.current?.emit('player-ready', { roomCode });
   };
 
   const startGame = () => {
-    socketRef.current?.emit('start-game');
+    socketRef.current?.emit('start-game', { roomCode });
   };
 
   const nextRound = () => {
-    socketRef.current?.emit('next-round');
+    socketRef.current?.emit('next-round', { roomCode });
   };
 
   const playAgain = () => {
-    socketRef.current?.emit('play-again');
+    socketRef.current?.emit('play-again', { roomCode });
     update({
       phase: 'lobby',
       currentRound: 0,
@@ -214,6 +325,7 @@ export default function GameRoomPage() {
       }
       setGeneratedImage(data.imageData);
       socketRef.current?.emit('submit-prompt', {
+        roomCode,
         prompt,
         imageData: data.imageData,
         tokensUsed,
@@ -224,6 +336,7 @@ export default function GameRoomPage() {
       setGenError(message);
       // Submit without image so the player isn't stuck
       socketRef.current?.emit('submit-prompt', {
+        roomCode,
         prompt,
         imageData: null,
         tokensUsed,
@@ -232,6 +345,12 @@ export default function GameRoomPage() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const usePowerup = (powerupId: PowerupId, targetPlayerId?: string) => {
+    socketRef.current?.emit('use-powerup', { roomCode: code, powerupId, targetPlayerId });
+    update({ myPowerup: null, powerupUsed: true });
+    setPowerupTarget(null);
   };
 
   const copyRoomCode = () => {
@@ -357,6 +476,9 @@ export default function GameRoomPage() {
             generatedImage={generatedImage}
             genError={genError}
             onSubmit={handlePromptSubmit}
+            onUsePowerup={usePowerup}
+            powerupTarget={powerupTarget}
+            onSetPowerupTarget={setPowerupTarget}
           />
         )}
 
@@ -518,17 +640,76 @@ function PlayingView({
   generatedImage,
   genError,
   onSubmit,
+  onUsePowerup,
+  powerupTarget,
+  onSetPowerupTarget,
 }: {
   gs: GameState;
   generating: boolean;
   generatedImage: string | null;
   genError: string | null;
   onSubmit: (prompt: string, tokensUsed: number) => void;
+  onUsePowerup: (powerupId: PowerupId, targetPlayerId?: string) => void;
+  powerupTarget: string | null;
+  onSetPowerupTarget: (id: string | null) => void;
 }) {
   const totalSeconds = Math.ceil(gs.roundDurationMs / 1000);
+  const effectiveBudget = Math.max(0, gs.tokenBudget - gs.tokenDrainAmount);
+  const def = gs.myPowerup ? POWERUP_DEFS[gs.myPowerup] : null;
+  const needsTarget = def?.requiresTarget ?? false;
+  const opponents = gs.players.filter(p => p.id !== gs.myPlayerId);
+
+  const handlePowerupActivate = () => {
+    if (!gs.myPowerup) return;
+    if (needsTarget) {
+      // Toggle target selection mode
+      onSetPowerupTarget(powerupTarget ? null : 'selecting');
+    } else {
+      onUsePowerup(gs.myPowerup);
+    }
+  };
+
+  const handleTargetSelect = (targetId: string) => {
+    if (!gs.myPowerup) return;
+    onUsePowerup(gs.myPowerup, targetId);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Powerup notification banner */}
+      {gs.powerupNotification && (
+        <div style={{
+          padding: '10px 14px',
+          background: gs.powerupNotification.type === 'attack' ? 'var(--coral)' : gs.powerupNotification.type === 'defend' ? 'var(--teal)' : 'var(--gold)',
+          border: 'var(--border)',
+          borderRadius: 'var(--radius-md)',
+          fontFamily: 'var(--font-body)',
+          fontWeight: 600,
+          fontSize: 13,
+          color: gs.powerupNotification.type === 'attack' ? 'var(--white)' : 'var(--black)',
+          animation: 'animate-slide-up 0.3s ease',
+        }}>
+          {gs.powerupNotification.message}
+        </div>
+      )}
+
+      {/* Freeze overlay */}
+      {gs.isFrozen && (
+        <div style={{
+          padding: '12px 16px',
+          background: '#dbeafe',
+          border: '2px solid #3b82f6',
+          borderRadius: 'var(--radius-md)',
+          fontFamily: 'var(--font-display)',
+          fontWeight: 800,
+          fontSize: 15,
+          color: '#1d4ed8',
+          textAlign: 'center',
+        }}>
+          ❄️ Timer frozen! {gs.frozenSecondsLeft}s remaining
+        </div>
+      )}
+
       {/* Round info + timer row */}
       <div style={{
         display: 'flex',
@@ -543,14 +724,26 @@ function PlayingView({
             {gs.currentRound} / {gs.totalRounds}
           </div>
         </div>
-        <CountdownTimer timeRemaining={gs.timeRemaining} totalSeconds={totalSeconds} />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <CountdownTimer timeRemaining={gs.isFrozen ? gs.timeRemaining : gs.timeRemaining} totalSeconds={totalSeconds} />
+          {gs.hasDoublePoints && (
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 700, color: '#d97706', background: '#fef3c7', padding: '2px 8px', borderRadius: 99, border: '1px solid #f59e0b' }}>
+              ⭐ 2× Points
+            </span>
+          )}
+          {gs.hasShield && (
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 700, color: '#0f766e', background: '#ccfbf1', padding: '2px 8px', borderRadius: 99, border: '1px solid #14b8a6' }}>
+              🛡️ Shielded
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Progress bar for timer */}
       <div className="progress-track">
         <div
           className={`progress-fill ${gs.timeRemaining <= 10 ? 'danger' : gs.timeRemaining <= 30 ? 'warning' : 'safe'}`}
-          style={{ width: `${(gs.timeRemaining / totalSeconds) * 100}%` }}
+          style={{ width: `${(gs.timeRemaining / totalSeconds) * 100}%`, opacity: gs.isFrozen ? 0.4 : 1 }}
         />
       </div>
 
@@ -568,10 +761,10 @@ function PlayingView({
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
               <span className={`badge badge-${gs.referenceImage.difficulty.toLowerCase()}`}>
-                {gs.referenceImage.difficulty}
+                {gs.revealedCategory ? gs.referenceImage.difficulty : gs.referenceImage.difficulty}
               </span>
               <span className="badge badge-category">
-                {gs.referenceImage.category}
+                {gs.revealedCategory ? gs.referenceImage.category : gs.referenceImage.category}
               </span>
             </div>
           </div>
@@ -601,6 +794,48 @@ function PlayingView({
         </div>
       )}
 
+      {/* Hint keywords */}
+      {gs.hintKeywords.length > 0 && (
+        <div style={{
+          padding: '10px 14px',
+          background: '#fefce8',
+          border: '1.5px solid #fbbf24',
+          borderRadius: 'var(--radius-md)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 12, opacity: 0.7 }}>💡 Keywords:</span>
+          {gs.hintKeywords.map(kw => (
+            <span key={kw} style={{
+              padding: '3px 10px',
+              background: '#fef08a',
+              border: '1px solid #fbbf24',
+              borderRadius: 99,
+              fontFamily: 'var(--font-body)',
+              fontWeight: 700,
+              fontSize: 12,
+            }}>{kw}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Powerup tray */}
+      {!gs.submittedThisRound && (
+        <PowerupTray
+          powerup={gs.myPowerup}
+          powerupUsed={gs.powerupUsed}
+          def={def}
+          needsTarget={needsTarget}
+          isSelectingTarget={powerupTarget === 'selecting'}
+          opponents={opponents}
+          onActivate={handlePowerupActivate}
+          onTargetSelect={handleTargetSelect}
+          onCancelTarget={() => onSetPowerupTarget(null)}
+        />
+      )}
+
       {/* Submitted state */}
       {gs.submittedThisRound ? (
         <SubmittedView
@@ -614,14 +849,35 @@ function PlayingView({
           <div className="card" style={{ padding: 16 }}>
             <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
               Write Your Prompt
+              {gs.tokenDrainAmount > 0 && (
+                <span style={{ marginLeft: 8, color: 'var(--coral)', fontSize: 12 }}>
+                  ⚡ Budget reduced by {gs.tokenDrainAmount} tokens
+                </span>
+              )}
             </div>
             <PromptEditor
-              budget={gs.tokenBudget}
+              budget={effectiveBudget}
               onSubmit={onSubmit}
-              disabled={false}
+              disabled={gs.isFrozen}
               generating={generating}
             />
           </div>
+
+          {gs.isFrozen && (
+            <div style={{
+              padding: '10px 14px',
+              background: '#dbeafe',
+              border: 'var(--border)',
+              borderRadius: 'var(--radius-md)',
+              fontFamily: 'var(--font-body)',
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#1d4ed8',
+              textAlign: 'center',
+            }}>
+              ❄️ Your input is frozen for {gs.frozenSecondsLeft} more seconds...
+            </div>
+          )}
 
           {genError && (
             <div style={{
@@ -638,6 +894,156 @@ function PlayingView({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ── Powerup Tray ──────────────────────────────────────────────────────────────
+
+const POWERUP_TYPE_COLORS: Record<string, { bg: string; border: string; label: string; text: string }> = {
+  offensive: { bg: '#fee2e2', border: '#f87171', label: '#dc2626', text: '#7f1d1d' },
+  defensive: { bg: '#d1fae5', border: '#34d399', label: '#059669', text: '#064e3b' },
+  utility:   { bg: '#ede9fe', border: '#a78bfa', label: '#7c3aed', text: '#3b0764' },
+};
+
+function PowerupTray({
+  powerup,
+  powerupUsed,
+  def,
+  needsTarget,
+  isSelectingTarget,
+  opponents,
+  onActivate,
+  onTargetSelect,
+  onCancelTarget,
+}: {
+  powerup: PowerupId | null;
+  powerupUsed: boolean;
+  def: (typeof POWERUP_DEFS)[PowerupId] | null | undefined;
+  needsTarget: boolean;
+  isSelectingTarget: boolean;
+  opponents: Player[];
+  onActivate: () => void;
+  onTargetSelect: (id: string) => void;
+  onCancelTarget: () => void;
+}) {
+  if (!powerup && !powerupUsed) return null;
+
+  const colors = def ? POWERUP_TYPE_COLORS[def.type] : POWERUP_TYPE_COLORS.utility;
+
+  return (
+    <div style={{
+      border: `2px solid ${powerupUsed ? '#d1d5db' : colors.border}`,
+      borderRadius: 'var(--radius-lg)',
+      background: powerupUsed ? '#f9fafb' : colors.bg,
+      padding: '12px 14px',
+      transition: 'all 200ms ease',
+    }}>
+      <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.6, marginBottom: 8 }}>
+        Your Powerup
+      </div>
+
+      {powerupUsed ? (
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, opacity: 0.5, fontStyle: 'italic' }}>
+          Powerup used this round
+        </div>
+      ) : def ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 28 }}>{def.emoji}</span>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                <span style={{
+                  fontFamily: 'var(--font-body)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  color: colors.label,
+                  background: 'white',
+                  padding: '1px 7px',
+                  borderRadius: 99,
+                  border: `1px solid ${colors.border}`,
+                }}>
+                  {def.type}
+                </span>
+              </div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16 }}>{def.name}</div>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, opacity: 0.7, marginTop: 1 }}>{def.description}</div>
+            </div>
+          </div>
+
+          {/* Target selection */}
+          {isSelectingTarget ? (
+            <div>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, marginBottom: 6, opacity: 0.7 }}>
+                Choose a target:
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {opponents.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => onTargetSelect(p.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      background: 'white',
+                      border: `1.5px solid ${colors.border}`,
+                      borderRadius: 'var(--radius-md)',
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-body)',
+                      fontWeight: 600,
+                      fontSize: 13,
+                      transition: 'background 120ms',
+                    }}
+                  >
+                    <span style={{ fontSize: 18 }}>{p.avatar}</span>
+                    <span>{p.name}</span>
+                  </button>
+                ))}
+                <button
+                  onClick={onCancelTarget}
+                  style={{
+                    padding: '6px 12px',
+                    background: 'none',
+                    border: '1.5px solid #d1d5db',
+                    borderRadius: 'var(--radius-md)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-body)',
+                    fontSize: 12,
+                    opacity: 0.6,
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={onActivate}
+              disabled={needsTarget && opponents.length === 0}
+              style={{
+                width: '100%',
+                padding: '9px 16px',
+                background: colors.label,
+                color: 'white',
+                border: 'none',
+                borderRadius: 'var(--radius-md)',
+                fontFamily: 'var(--font-display)',
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: needsTarget && opponents.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: needsTarget && opponents.length === 0 ? 0.5 : 1,
+                transition: 'opacity 120ms',
+              }}
+            >
+              {needsTarget ? `Use on opponent →` : `Activate ${def.emoji}`}
+            </button>
+          )}
+        </>
+      ) : null}
     </div>
   );
 }
