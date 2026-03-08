@@ -1,11 +1,13 @@
 import { VertexAI } from '@google-cloud/vertexai';
 import { NextRequest, NextResponse } from 'next/server';
+import { ensureVertexCredentials } from '@/lib/vertex-credentials';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || '';
 const LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
 const IMAGE_GEN_MODEL = process.env.IMAGE_GEN_MODEL || 'imagen-3.0-generate-002';
 
 export async function POST(req: NextRequest) {
+    ensureVertexCredentials();
     const body = await req.json();
     const { prompt } = body;
 

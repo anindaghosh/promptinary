@@ -112,7 +112,8 @@ export function useGameSocket() {
 
   // Connect socket on mount
   useEffect(() => {
-    const socket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';
+    const socket = io(socketUrl, { path: '/socket.io', transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
     socket.on('connect', () => {

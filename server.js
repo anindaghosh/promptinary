@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
 const port = parseInt(process.env.PORT || '3000', 10);
+const NEXT_APP_URL = process.env.NEXT_APP_URL || `http://localhost:${port}`;
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -307,7 +308,7 @@ app.prepare().then(() => {
 
       if (submission.imageData) {
         try {
-          const response = await fetch(`http://localhost:${port}/api/score-image`, {
+          const response = await fetch(`${NEXT_APP_URL}/api/score-image`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

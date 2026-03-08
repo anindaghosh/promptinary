@@ -1,6 +1,7 @@
 import { VertexAI, HarmCategory, HarmBlockThreshold } from '@google-cloud/vertexai';
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
+import { ensureVertexCredentials } from '@/lib/vertex-credentials';
 import path from 'path';
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || '';
@@ -31,6 +32,7 @@ const REFERENCE_IMAGES: Record<string, { filename: string; category: string; dif
 };
 
 export async function POST(req: NextRequest) {
+    ensureVertexCredentials();
     try {
         const { referenceImageId, generatedImageBase64 } = await req.json();
 

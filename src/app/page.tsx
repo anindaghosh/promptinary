@@ -1,10 +1,50 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
 
 const AVATARS = ['🎨', '🖌️', '🎭', '🦄', '🚀', '🌈', '🔥', '⚡', '🎯', '🌟'];
+
+const LOGO_URL = process.env.NEXT_PUBLIC_LOGO_URL || '/logo.svg';
+
+function LogoDisplay() {
+  const [imgError, setImgError] = useState(false);
+
+  if (imgError) {
+    return (
+      <>
+        <div style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🎨</div>
+        <h1 style={{
+          fontFamily: 'var(--font-display)',
+          fontWeight: 900,
+          fontSize: 'clamp(32px, 8vw, 44px)',
+          letterSpacing: '-0.03em',
+          color: 'var(--black)',
+          lineHeight: 1.05,
+          marginBottom: 12,
+        }}>
+          Promptinary
+        </h1>
+      </>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center' }}>
+      <Image
+        src={LOGO_URL}
+        alt="Logo"
+        width={560}
+        height={168}
+        style={{ objectFit: 'contain', maxHeight: 168 }}
+        onError={() => setImgError(true)}
+        unoptimized
+      />
+    </div>
+  );
+}
 
 export default function LandingPage() {
   const router = useRouter();
@@ -32,7 +72,8 @@ export default function LandingPage() {
         resolve(socketRef.current);
         return;
       }
-      const socket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
+      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';
+      const socket = io(socketUrl, { path: '/socket.io', transports: ['websocket', 'polling'] });
       socketRef.current = socket;
       socket.on('connect', () => resolve(socket));
     });
@@ -96,18 +137,7 @@ export default function LandingPage() {
       <div className="page-content" style={{ paddingTop: 60, paddingBottom: 48, display: 'flex', flexDirection: 'column', gap: 0 }}>
         {/* Hero */}
         <div style={{ textAlign: 'center', marginBottom: 40 }} className="animate-slide-up">
-          <div style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🎨</div>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 900,
-            fontSize: 'clamp(32px, 8vw, 44px)',
-            letterSpacing: '-0.03em',
-            color: 'var(--black)',
-            lineHeight: 1.05,
-            marginBottom: 12,
-          }}>
-            Promptinary
-          </h1>
+          <LogoDisplay />
           <p style={{
             fontFamily: 'var(--font-body)',
             fontSize: 15,
@@ -237,8 +267,18 @@ export default function LandingPage() {
           </div>
         )}
 
+        {/* Quick links */}
+        <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
+          <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => router.push('/leaderboard')}>
+            🏆 Leaderboard
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => router.push('/profile')}>
+            👤 Profile
+          </button>
+        </div>
+
         {/* How to play */}
-        <div style={{ marginTop: 40 }} className="animate-slide-up stagger-4">
+        <div style={{ marginTop: 28 }} className="animate-slide-up stagger-4">
           <h2 style={{
             fontFamily: 'var(--font-display)',
             fontWeight: 700,
