@@ -39,9 +39,10 @@ export interface PlayerResult {
   submissionTimeMs?: number;
   similarityScore: number;
   scoreBreakdown?: ScoreBreakdown;
-  roundScore?: number;    // server field
-  totalScore?: number;   // alias used by some components
+  roundScore?: number;       // server field
+  totalScore?: number;      // alias used by some components
   reasoning: string;
+  suggestedPrompt?: string; // AI-generated improved prompt
   rank?: number;
 }
 

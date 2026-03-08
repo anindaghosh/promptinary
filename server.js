@@ -503,6 +503,7 @@ app.prepare().then(() => {
 
       let similarityScore = 0;
       let reasoning = 'No image submitted.';
+      let suggestedPrompt = '';
 
       // #region agent log
       try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:scoring-loop',message:'scoring submission',data:{playerId,hasImageData:!!submission.imageData,imageDataLen:submission.imageData?submission.imageData.length:0,imageDataPrefix:submission.imageData?submission.imageData.substring(0,80):'none'},timestamp:Date.now(),hypothesisId:'H-I1,H-I2'})+'\n');}catch(e){}
@@ -519,6 +520,7 @@ app.prepare().then(() => {
             body: JSON.stringify({
               referenceImageId: room.currentImageId,
               generatedImageBase64: submission.imageData,
+              originalPrompt: submission.prompt,
             }),
           });
           const data = await response.json();
@@ -527,6 +529,7 @@ app.prepare().then(() => {
           // #endregion
           similarityScore = data.similarityScore ?? 0;
           reasoning = data.reasoning ?? '';
+          suggestedPrompt = data.suggestedPrompt ?? '';
         } catch (err) {
           // #region agent log
           try{fs.appendFileSync('/Users/anindaghosh/Work/Projects/Columbia Hack/trendsiq-app/.cursor/debug-5dffed.log',JSON.stringify({sessionId:'5dffed',location:'server.js:score-fetch-error',message:'score-image API failed',data:{error:err?.message},timestamp:Date.now(),hypothesisId:'H-I1'})+'\n');}catch(e){}
@@ -564,6 +567,7 @@ app.prepare().then(() => {
         similarityScore,
         roundScore,
         reasoning,
+        suggestedPrompt,
       });
     }
 

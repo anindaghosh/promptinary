@@ -34,7 +34,7 @@ const REFERENCE_IMAGES: Record<string, { filename: string; category: string; dif
 export async function POST(req: NextRequest) {
     ensureVertexCredentials();
     try {
-        const { referenceImageId, generatedImageBase64 } = await req.json();
+        const { referenceImageId, generatedImageBase64, originalPrompt } = await req.json();
 
         if (!referenceImageId || !generatedImageBase64) {
             return NextResponse.json({ error: 'referenceImageId and generatedImageBase64 are required' }, { status: 400 });
@@ -81,11 +81,13 @@ export async function POST(req: NextRequest) {
             },
         });
 
+        const promptHint = originalPrompt ? `\nThe player's original prompt was: "${originalPrompt}"` : '';
+
         const prompt = `You are an expert visual similarity judge for an AI image prompt game.
 
 You are given two images:
 1. REFERENCE IMAGE: The original target image (category: ${imageInfo.category}, titled "${imageInfo.title}")
-2. GENERATED IMAGE: An image created by an AI based on a player's text prompt
+2. GENERATED IMAGE: An image created by an AI based on a player's text prompt${promptHint}
 
 Your job is to score how well the generated image matches the reference image.
 
@@ -94,6 +96,8 @@ Evaluate across these dimensions:
 - Color palette & lighting (25%): dominant colors, contrast, mood lighting  
 - Subject & content (30%): main subjects, objects, scene elements present
 - Style & atmosphere (15%): artistic style, mood, texture, overall feel
+
+Also suggest a concise improved prompt (10-18 words) that would generate an image much closer to the reference. Focus on the most important visual elements that are missing or wrong.
 
 Return ONLY valid JSON with this exact format:
 {
@@ -104,7 +108,8 @@ Return ONLY valid JSON with this exact format:
     "subjectContent": <integer 0-100>,
     "styleAtmosphere": <integer 0-100>
   },
-  "reasoning": "<2-3 sentence explanation of the score, what matched well and what didn't>"
+  "reasoning": "<2-3 sentence explanation of the score, what matched well and what didn't>",
+  "suggestedPrompt": "<improved prompt, 10-18 words, vivid and specific>"
 }`;
 
         const response = await model.generateContent({
@@ -128,6 +133,7 @@ Return ONLY valid JSON with this exact format:
             similarityScore: parsed.similarityScore ?? 0,
             breakdown: parsed.breakdown ?? {},
             reasoning: parsed.reasoning ?? '',
+            suggestedPrompt: parsed.suggestedPrompt ?? '',
         });
 
     } catch (error: any) {

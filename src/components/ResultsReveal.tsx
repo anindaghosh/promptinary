@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { PlayerResult, ReferenceImage } from '@/hooks/useGameSocket';
 
 interface ResultsRevealProps {
@@ -200,6 +200,80 @@ function PlayerResultCard({
           {result.reasoning}
         </div>
       )}
+
+      {/* Suggested better prompt */}
+      {result.suggestedPrompt && (
+        <BetterPromptCard prompt={result.suggestedPrompt} />
+      )}
+    </div>
+  );
+}
+
+function BetterPromptCard({ prompt }: { prompt: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(() => {
+    navigator.clipboard.writeText(prompt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [prompt]);
+
+  return (
+    <div style={{
+      marginTop: 12,
+      padding: '10px 12px',
+      background: 'var(--teal)',
+      border: 'var(--border)',
+      borderRadius: 'var(--radius-md)',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 6,
+      }}>
+        <div style={{
+          fontFamily: 'var(--font-body)',
+          fontSize: 11,
+          fontWeight: 700,
+          color: 'var(--white)',
+          opacity: 0.85,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+        }}>
+          💡 Better Prompt
+        </div>
+        <button
+          onClick={copy}
+          title="Copy to clipboard"
+          style={{
+            background: copied ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)',
+            border: '1.5px solid rgba(255,255,255,0.4)',
+            borderRadius: 'var(--radius-pill)',
+            color: 'var(--white)',
+            fontFamily: 'var(--font-body)',
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '3px 10px',
+            cursor: 'pointer',
+            transition: 'all 120ms ease',
+          }}
+        >
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+      <div style={{
+        fontFamily: 'var(--font-body)',
+        fontSize: 13,
+        fontWeight: 600,
+        color: 'var(--white)',
+        lineHeight: 1.5,
+        fontStyle: 'italic',
+      }}>
+        &ldquo;{prompt}&rdquo;
+      </div>
     </div>
   );
 }
