@@ -62,10 +62,10 @@ export default function PlayerList({
             <div>
               {isMe ? (
                 <button
-                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-coral' : 'btn-primary'}`}
+                  className={`btn btn-sm btn-auto ${me?.isReady ? 'btn-primary' : 'btn-ghost'}`}
                   onClick={() => onToggleReady(!me?.isReady)}
                 >
-                  {me?.isReady ? 'Not Ready' : 'Ready ✓'}
+                  {me?.isReady ? '✓ Ready' : 'Ready Up'}
                 </button>
               ) : (
                 <span style={{
@@ -108,7 +108,9 @@ export default function PlayerList({
           style={{ marginTop: 8 }}
         >
           {!canStart
-            ? `Waiting for players (${players.filter(p => p.isReady).length}/${players.length} ready)`
+            ? players.length < 2
+              ? 'Need at least 2 players'
+              : 'Mark yourself ready to start'
             : 'Start Game ▶'
           }
         </button>
