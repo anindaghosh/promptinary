@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Socket } from 'socket.io-client';
 import { getSocket } from '@/lib/socket';
+import { getAudio, PhaseKey } from '@/lib/audio';
 import CountdownTimer from '@/components/CountdownTimer';
 import PlayerList from '@/components/PlayerList';
 import PromptEditor from '@/components/PromptEditor';
@@ -67,7 +68,32 @@ export default function GameRoomPage() {
   const [genError, setGenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [powerupTarget, setPowerupTarget] = useState<string | null>(null);
+  const [muted, setMuted] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('promptinary_muted') === 'true' : false
+  );
   const freezeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Background music ──────────────────────────────────────────────────
+  // Randomize lobby+playing tracks once per room visit
+  useEffect(() => {
+    getAudio().randomize();
+    return () => getAudio().stop();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Switch to the right track whenever the game phase changes
+  useEffect(() => {
+    const phaseMap: Record<string, PhaseKey> = {
+      lobby:       'lobby',
+      countdown:   'countdown',
+      playing:     'playing',
+      scoring:     'scoring',
+      reveal:      'reveal',
+      leaderboard: 'leaderboard',
+    };
+    const track = phaseMap[gs.phase];
+    if (track) getAudio().play(track);
+  }, [gs.phase]);
 
   const update = useCallback((patch: Partial<GameState>) => {
     setGs(prev => ({ ...prev, ...patch }));
@@ -393,28 +419,56 @@ export default function GameRoomPage() {
             ← Home
           </button>
 
-          <button
-            onClick={copyRoomCode}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 14px',
-              background: 'var(--black)',
-              color: 'var(--white)',
-              border: 'var(--border)',
-              borderRadius: 'var(--radius-pill)',
-              fontFamily: 'var(--font-display)',
-              fontWeight: 700,
-              fontSize: 14,
-              cursor: 'pointer',
-              letterSpacing: '0.08em',
-              boxShadow: 'var(--shadow-sm)',
-              transition: 'all 120ms ease',
-            }}
-          >
-            {copied ? '✓ Copied!' : `# ${code}`}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* Mute / unmute background music */}
+            <button
+              onClick={() => {
+                const nowMuted = getAudio().toggleMute();
+                setMuted(nowMuted);
+              }}
+              title={muted ? 'Unmute music' : 'Mute music'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 34,
+                height: 34,
+                background: muted ? 'var(--track)' : 'var(--white)',
+                border: 'var(--border)',
+                borderRadius: 'var(--radius-pill)',
+                cursor: 'pointer',
+                fontSize: 16,
+                boxShadow: 'var(--shadow-sm)',
+                transition: 'all 120ms ease',
+                flexShrink: 0,
+              }}
+            >
+              {muted ? '🔇' : '🎵'}
+            </button>
+
+            <button
+              onClick={copyRoomCode}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                background: 'var(--black)',
+                color: 'var(--white)',
+                border: 'var(--border)',
+                borderRadius: 'var(--radius-pill)',
+                fontFamily: 'var(--font-display)',
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: 'pointer',
+                letterSpacing: '0.08em',
+                boxShadow: 'var(--shadow-sm)',
+                transition: 'all 120ms ease',
+              }}
+            >
+              {copied ? '✓ Copied!' : `# ${code}`}
+            </button>
+          </div>
         </div>
 
         {/* Global error banner */}
